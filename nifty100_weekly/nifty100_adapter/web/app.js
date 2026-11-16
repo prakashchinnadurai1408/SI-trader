@@ -14,7 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
-  models: [], evidence: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
+  models: [], evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -383,8 +383,59 @@ function evidenceView() {
   </section>`;
 }
 
+function fullCatalogueView() {
+  const result = state.fullCatalogue;
+  const stocks = result?.stocks || [];
+  return `<section class="card desk-feeds">
+    <div class="desk-card-header"><h2>Full 48-parameter screen</h2><span class="desk-tag">Research only</span></div>
+    <p class="desk-copy">All 48 parameters need current, typed evidence. Stock-level fields need all 100 constituents.
+       The model sees a summary of every parameter. Filters and vetoes are applied before scoring.</p>
+    <div class="actions desk-copy">
+      <button class="secondary" data-action="catalogue-readiness" ${state.busy ? "disabled" : ""}>Check full catalogue</button>
+      <button data-action="full-catalogue" ${state.busy || !result?.ready || !config.model ? "disabled" : ""}>Run full AI screen</button>
+    </div>
+    <div class="desk-copy">${feedback()}</div>
+    ${!config.model ? '<p class="desk-copy note">Select an Ollama model in Strategy settings to run a complete screen.</p>' : ""}
+    ${result ? `<p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
+      ${result.errors.map(error => `<p class="desk-copy error" role="alert">${escapeHtml(error)}</p>`).join("")}
+      ${!result.providerConfigured ? '<p class="desk-copy note">No full-catalogue provider file is configured.</p>' : ""}
+      ${result.status === "research_only" ? `<p class="desk-copy">${result.parametersUsed} parameters reviewed by role · ${result.eligibleStocks} stocks passed filters and vetoes.</p>
+        ${gridTable(["Stock", "Close", "Research score", "Observed flags"], stocks.map(item =>
+          [`<strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company)}</small>`, cash(item.close), count(item.score), escapeHtml(item.flags.join(", ") || "—")]), "No stocks passed the full risk screen.")}
+        <details class="desk-copy"><summary>Score weights and market dials</summary>
+          ${gridTable(["Parameter", "Output"], [
+            ...Object.entries(result.weights).map(([key, weight]) => [escapeHtml(key), weight.toFixed(2) + "% weight"]),
+            ...Object.entries(result.marketDial).map(([key, value]) => [escapeHtml(key), count(value) + " / 100 — research context"]),
+          ], "")}</details>` : ""}
+      ${gridTable(["Parameter", "Role", "Coverage", "Stale", "Invalid", "Required value"], result.parameters.map(item => [
+        escapeHtml(item.label), escapeHtml(item.role), `${item.available}/${item.expected} · ${item.ready ? "Ready" : "Missing or invalid"}`,
+        count(item.stale), count(item.invalid), escapeHtml(item.contract),
+      ]), "")}` : ""}
+  </section>`;
+}
+
+async function loadFullCatalogue(run) {
+  if (state.busy) return;
+  state.busy = true;
+  show(run ? "Verifying all inputs, then running the AI screen." : "Checking all 48 parameters.");
+  try {
+    state.fullCatalogue = await request(run ? "/api/full-catalogue" : "/api/catalogue-readiness",
+      run ? {model: config.model, objective: config.objective} : undefined);
+    const result = state.fullCatalogue;
+    show(result.ready
+      ? (run ? "Full research screen complete. Trade submission is unavailable." : "All 48 inputs meet the data contract.")
+      : "Full run blocked until every parameter has usable data.");
+  } catch (error) {
+    state.fullCatalogue = null;
+    show(error.message, true);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
 function dashboard() {
-  const tabs = [["overview", "Strategy overview"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
+  const tabs = [["overview", "Strategy overview"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
   const linked = state.snapshot && ["funds", "holdings", "positions", "orders", "trades"].some(key => state.snapshot[key]?.value !== undefined);
   return `<div class="desk">
     <aside class="desk-nav">
@@ -405,7 +456,7 @@ function dashboard() {
           <button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>
         </div>
       </header>
-      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : overview()}
+      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : overview()}
     </main>
   </div>`;
 }
@@ -555,6 +606,12 @@ app.addEventListener("submit", async event => {
 app.addEventListener("click", async event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   switch (action) {
+    case "catalogue-readiness":
+      await loadFullCatalogue(false);
+      break;
+    case "full-catalogue":
+      if (state.fullCatalogue?.ready && config.model) await loadFullCatalogue(true);
+      break;
     case "load-evidence":
       if (state.busy) break;
       state.busy = true;

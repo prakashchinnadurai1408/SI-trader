@@ -10,6 +10,7 @@ from .ai_strategy import generate_plan, installed_models
 from .backtest.weekly_backtester import WeeklyBacktester
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
+from .full_catalogue import full_catalogue
 from .investright import broker_get, holdings_count
 from .research_watchlist import build_watchlist
 from .strategy_builder import build_research_strategy
@@ -63,9 +64,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/catalogue-evidence":
                 frame, market = load_nifty100()
                 self.send_json(200, collect_evidence(frame, market))
+            elif self.path == "/api/catalogue-readiness":
+                self.send_json(200, full_catalogue())
             elif self.path == "/api/models":
                 self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist"):
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
@@ -79,6 +82,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ValueError("Enter a strategy objective of up to 500 characters.")
                 if not isinstance(model, str) or model not in installed_models():
                     raise ValueError("Choose an installed Ollama model in LLM configuration.")
+                if self.path == "/api/full-catalogue":
+                    self.send_json(200, full_catalogue(model, objective.strip()))
+                    return
                 if self.path == "/api/watchlist":
                     self.send_json(200, build_watchlist(model, objective.strip()))
                     return

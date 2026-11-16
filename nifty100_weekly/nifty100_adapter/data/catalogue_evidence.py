@@ -172,7 +172,7 @@ BUILTIN = (
 )
 
 
-def local_evidence(members, day, cutoff, path):
+def local_evidence(members, day, cutoff, path, global_keys=()):
     with path.open("rb") as stream:
         raw = stream.read(2_000_001)
     if len(raw) > 2_000_000:
@@ -188,7 +188,7 @@ def local_evidence(members, day, cutoff, path):
         key, symbol, raw_date, url, value = (row.get(field) for field in ("parameter", "symbol", "asOf", "source", "value"))
         if not isinstance(key, str) or key not in PARAMETERS or not isinstance(symbol, str) or (symbol != "*" and symbol not in members):
             raise ValueError("Local evidence contains an unknown parameter or nonmember symbol.")
-        if symbol == "*" and PARAMETERS[key].role_type.value in ("Score", "Filter", "Veto"):
+        if symbol == "*" and key not in global_keys and PARAMETERS[key].role_type.value in ("Score", "Filter", "Veto"):
             raise ValueError(f"{key} needs company-specific observations.")
         stamp = datetime.fromisoformat(raw_date) if isinstance(raw_date, str) else None
         if stamp is None or stamp.tzinfo is None or stamp > cutoff:
