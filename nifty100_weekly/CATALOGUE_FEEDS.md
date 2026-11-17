@@ -40,3 +40,13 @@ The full screen fills daily momentum, five-session momentum and turnover from NS
 - Market dials are scores from 0 to 100, higher means lower market risk. Market inputs are international conditions, government news, political incidents, regulator announcements, historical events, and the three rates. Other rows are stock-specific.
 
 The AI receives a summary of all 48 inputs and chooses positive weights for every Score factor. Fixed code applies filters and vetoes, ranks the surviving names, and displays company flags and market dials. Advisory inputs and flags provide review context. Provider-declared source links and dates are validated for structure and freshness, but their accuracy needs independent verification. This is a research ranking without any order path. Use historical ablation tests on the same declared holdout before claiming any accuracy or ROI improvement.
+
+## Three-agent review
+
+Open **Three-agent review**, choose an Ollama model and research objective in Strategy settings, and optionally enter NSE symbols you already hold. This workflow can run when the strict Full 48 research screen is blocked.
+
+- Maker receives coverage and observed signals across the catalogue and nominates up to six candidates from a short list. Complete scoring data determines the short list. Partial observations remain context.
+- Checker considers downside scenarios including drawdown, reversal, liquidity, correlation, costs, valuation, and events. It can exclude a name, reject the shortlist, or flag a holding for exit review.
+- Umpire can weight only surviving research ideas and can recommend an exit review only for supplied holdings. Known failed checks cannot be overridden. Missing data alone does not generate an exit signal.
+
+The three stages use separate calls to the configured model. Shared model errors are still possible. Unknown or stale inputs remain visible. Weights are research priorities and have no broker order path. Exit review is a prompt to examine the evidence, not an instruction to sell. Accuracy remains subject to an out-of-sample comparison and Gate G1.

@@ -12,6 +12,7 @@ from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
 from .full_catalogue import full_catalogue
 from .investright import broker_get, holdings_count
+from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
 from .strategy_builder import build_research_strategy
 from .trading_workspace import ENDPOINTS, affordable_candidates, broker_snapshot, cash_amount, number, paper_sizing
@@ -68,7 +69,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, full_catalogue())
             elif self.path == "/api/models":
                 self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue"):
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
@@ -82,6 +83,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ValueError("Enter a strategy objective of up to 500 characters.")
                 if not isinstance(model, str) or model not in installed_models():
                     raise ValueError("Choose an installed Ollama model in LLM configuration.")
+                if self.path == "/api/research-committee":
+                    holdings = held_symbols(payload.get("holdings", []))
+                    self.send_json(200, build_committee(model, objective.strip(), holdings))
+                    return
                 if self.path == "/api/full-catalogue":
                     self.send_json(200, full_catalogue(model, objective.strip()))
                     return

@@ -14,7 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
-  models: [], evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
+  models: [], committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -434,8 +434,40 @@ async function loadFullCatalogue(run) {
   }
 }
 
+function committeeView() {
+  const result = state.committee;
+  const list = values => escapeHtml(values.join(", ") || "None");
+  return `<section class="card desk-feeds">
+    <div class="desk-card-header"><h2>Maker, Checker &amp; Umpire</h2><span class="desk-tag">Research only</span></div>
+    <p class="desk-copy">Get a second opinion on the shortlist. Partial evidence supports research only. Investment sizing and orders are unavailable.</p>
+    <form id="research-committee" class="desk-copy">
+      <label for="committee-holdings">Held NSE symbols for exit review (optional)</label>
+      <input id="committee-holdings" name="holdings" value="${escapeHtml(state.committeeHoldings)}" placeholder="Comma-separated NSE symbols">
+      <div class="actions"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Agents reviewing…" : "Run three-agent review"}</button></div>
+    </form>
+    ${!config.model ? '<p class="desk-copy note">Select a model in Strategy settings.</p>' : ""}
+    <div class="desk-copy">${feedback()}</div>
+    ${result ? `<div class="builder-result">
+      <p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
+      ${result.dataErrors.map(error => `<p class="desk-copy error">${escapeHtml(error)}</p>`).join("")}
+      <p class="desk-copy"><strong>Maker shortlist</strong> · ${list(result.maker)}</p>
+      <p class="desk-copy"><strong>Checker exclusions</strong> · ${list(result.checkerAvoids)}${result.checkerRejectedStrategy ? " · Checker rejected the research shortlist" : ""}</p>
+      <p class="desk-copy"><strong>Downside scenarios</strong> · ${list(result.scenarios)}</p>
+      <p class="desk-copy"><strong>Umpire research priorities</strong></p>
+      ${gridTable(["Stock", "Close", "1 session", "5 sessions", "Research weight", "Unverified risk checks"],
+        result.researchPriorities.map(item => [escapeHtml(item.symbol), cash(item.close), percent(item.daily_pct),
+          percent(item.five_session_pct), count(item.research_weight_pct) + "%", count(item.missing_risk_count)]), "No priorities passed reconciliation.")}
+      <p class="desk-copy"><strong>Held stocks flagged for exit review</strong></p>
+      ${gridTable(["Stock", "Review reason", "Known failures"], result.reviewExits.map(item =>
+        [escapeHtml(item.symbol), escapeHtml(item.reason), list(item.knownFailures)]), "No held stocks flagged.")}
+      ${result.outsideUniverseHoldings.length ? `<p class="desk-copy note">Outside current Nifty 100 coverage: ${list(result.outsideUniverseHoldings)}.</p>` : ""}
+      <p class="desk-copy note">Weights are research priorities. They are not proposed order sizes.</p>
+    </div>` : ""}
+  </section>`;
+}
+
 function dashboard() {
-  const tabs = [["overview", "Strategy overview"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
+  const tabs = [["overview", "Strategy overview"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
   const linked = state.snapshot && ["funds", "holdings", "positions", "orders", "trades"].some(key => state.snapshot[key]?.value !== undefined);
   return `<div class="desk">
     <aside class="desk-nav">
@@ -456,7 +488,7 @@ function dashboard() {
           <button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>
         </div>
       </header>
-      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : overview()}
+      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() : overview()}
     </main>
   </div>`;
 }
@@ -488,6 +520,7 @@ async function request(path, body) {
 
 app.addEventListener("input", event => {
   if (event.target.id === "research-objective") state.researchObjective = event.target.value;
+  if (event.target.id === "committee-holdings") state.committeeHoldings = event.target.value;
 });
 
 app.addEventListener("submit", async event => {
@@ -509,6 +542,20 @@ app.addEventListener("submit", async event => {
     }
     state.view = "broker";
     show();
+  } else if (event.target.id === "research-committee" && !state.busy && config.model) {
+    const holdings = form.get("holdings").split(",").map(item => item.trim().toUpperCase()).filter(Boolean);
+    state.busy = true;
+    state.committee = null;
+    show("Maker, Checker and Umpire are reviewing in sequence. This may take a few minutes.");
+    try {
+      state.committee = await request("/api/research-committee", {model: config.model, objective: config.objective, holdings});
+      show("Three-agent review complete.");
+    } catch (error) {
+      show(error.message, true);
+    } finally {
+      state.busy = false;
+      render();
+    }
   } else if (event.target.id === "watchlist" && !state.busy && config.model) {
     state.busy = true;
     state.watchlist = null;
