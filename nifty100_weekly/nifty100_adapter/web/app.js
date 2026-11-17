@@ -14,6 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
+  parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
   models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
@@ -261,6 +262,48 @@ function home() {
   </div>`;
 }
 
+function parameterRunPanel(report) {
+  const selected = state.preferParameterPreview ? state.parameterPreview || report : report || state.parameterPreview;
+  const symbol = selected?.symbols.includes(state.parameterSymbol) ? state.parameterSymbol : "";
+  const labels = {preview: "Evidence preview", weekly: "Weekly paper run", monthly: "Monthly proposal"};
+  const evidenceLink = (url, label) => url.startsWith("https://")
+    ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+    : escapeHtml(label);
+  return `<section class="card desk-card parameter-run">
+    <div class="desk-card-header"><h2>48-Parameter Run Report</h2>
+      <span class="desk-tag">${selected ? labels[selected.mode] : "Evidence"}</span></div>
+    <div class="desk-copy">
+      <p>Review which inputs affected this strategy and which observations are still missing.</p>
+      <div class="actions"><button class="secondary" data-action="parameter-preview" ${state.busy ? "disabled" : ""}>Refresh evidence preview</button>
+        ${report && state.preferParameterPreview ? '<button class="secondary" data-action="parameter-run">Show strategy run report</button>' : ""}</div>
+      ${state.parameterReportMessage ? `<p role="status">${escapeHtml(state.parameterReportMessage)}</p>` : ""}
+      ${selected ? `<p><strong>${count(selected.complete)}/${count(selected.total)} complete</strong> · NSE close ${escapeHtml(selected.marketAsOf)}</p>` : ""}
+      ${selected?.mode === "monthly" ? '<p class="note">These observations informed the proposal. The backtest reads its own dated historical bundle.</p>' : ""}
+      ${selected?.mode === "weekly" ? '<p class="note">Known failed checks exclude stocks. Missing observations remain unknown in this paper simulation.</p>' : ""}
+      ${selected?.symbols.length ? `<label for="parameter-symbol">Inspect a basket stock</label>
+        <select id="parameter-symbol"><option value="">Nifty 100 coverage</option>${selected.symbols.map(name =>
+          `<option value="${escapeHtml(name)}" ${symbol === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>` : ""}
+      ${selected?.errors.map(issue => `<p class="note">${escapeHtml(issue)}</p>`).join("") || ""}
+    </div>
+    ${selected ? `<details class="desk-copy"><summary>Provider retrieval</summary>
+      ${gridTable(["Provider", "Status", "Observations"], selected.sourceFeeds.map(item =>
+        [escapeHtml(item.name), escapeHtml(item.status), count(item.observations)]), "No provider status is available.")}</details>
+      <details class="desk-copy" open><summary>Parameter details</summary>
+        ${gridTable(["Parameter", "Role", "Strategy use", "Coverage", "Issues", "Latest evidence", "Sources"], selected.rows.map(item => {
+          const observation = item.stockEvidence[symbol];
+          const issues = [[item.unknown, "unknown"], [item.stale, "stale"], [item.invalid, "invalid"], [item.conflicts, "conflicts"]]
+            .filter(([total]) => total > 0).map(([total, label]) => count(total) + " " + label).join(" · ");
+          const use = item.use + (item.weight === null ? "" : " · weight " + item.weight)
+            + (item.excludedStocks ? " · " + item.excludedStocks + " excluded" : "");
+          return [escapeHtml(item.label), escapeHtml(item.role), escapeHtml(use), count(item.available) + "/" + count(item.expected),
+            issues || "—", symbol ? (observation ? escapeHtml(String(observation.value)) + " · " + escapeHtml(observation.asOf)
+              + (observation.outcome ? " · " + escapeHtml(observation.outcome) : "") : "Unknown for this stock") : count(item.latestObservation),
+            observation ? evidenceLink(observation.source, "Open source") : item.sources.map((url, index) => evidenceLink(url, url.startsWith("https://") ? "Source " + (index + 1) : url)).join(" · ") || "—"];
+        }), "")}
+      </details>` : ""}
+  </section>`;
+}
+
 function weekly() {
   const plan = state.plan;
   const run = plan?.execution;
@@ -304,7 +347,8 @@ function weekly() {
           <small>${cash(run?.scenarioPnl?.[index])}</small></div>`).join("")}
         <p class="note">Scenario based on price changes you set. It does not predict market returns.</p>
       </section>
-    </div>`;
+    </div>
+    ${parameterRunPanel(plan?.parameterRunReport)}`;
 }
 
 async function refreshBroker() {
@@ -629,7 +673,7 @@ function dashboard() {
         ${brokerTab ? `<button class="secondary" data-action="refresh" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Syncing…" : "Refresh broker"}</button>` : ""}
         ${state.tab === "weekly" ? `<button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>` : ""}
       </header>
-      ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}</div>` :
+      ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}${parameterRunPanel(state.researchProposal?.parameterRunReport)}</div>` :
         state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() :
         state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() :
         state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() :
@@ -676,6 +720,14 @@ app.addEventListener("input", event => {
   }
 });
 
+app.addEventListener("change", event => {
+  if (event.target.id === "parameter-symbol") {
+    state.parameterSymbol = event.target.value;
+    render();
+    document.querySelector("#parameter-symbol")?.focus({preventScroll: true});
+  }
+});
+
 app.addEventListener("submit", async event => {
   event.preventDefault();
   const form = new FormData(event.target);
@@ -706,7 +758,10 @@ app.addEventListener("submit", async event => {
     show();
     try {
       state.monthlyResult = await request("/api/monthly-comparison", {...state.monthlyInputs, run,
-        challenger: state.monthlyInputs.includeAI ? state.researchProposal : null});
+        challenger: state.monthlyInputs.includeAI ? {
+          kind: state.researchProposal.kind, schema_version: state.researchProposal.schema_version,
+          weights: state.researchProposal.weights,
+        } : null});
       state.monthlyFeedback = "";
     } catch (error) {
       state.monthlyFeedback = error.message;
@@ -770,6 +825,8 @@ app.addEventListener("submit", async event => {
       state.researchProposal = await request("/api/strategy-builder", {
         model: config.model, objective: state.researchObjective,
       });
+      state.preferParameterPreview = false;
+      state.parameterReportMessage = "";
       show("Proposal ready. Include it in the historical backtest below or export it.");
     } catch (error) {
       show(error.message, true);
@@ -820,6 +877,8 @@ app.addEventListener("submit", async event => {
       const result = await request("/api/strategy", config);
       if (state.halted) return;
       state.plan = result;
+      state.preferParameterPreview = false;
+      state.parameterReportMessage = "";
       config.parameters = result.parameters;
       localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
       state.message = result.message || (result.execution.fills.length
@@ -840,6 +899,27 @@ app.addEventListener("submit", async event => {
 app.addEventListener("click", async event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   switch (action) {
+    case "parameter-run":
+      state.preferParameterPreview = false;
+      state.parameterReportMessage = "";
+      render();
+      break;
+    case "parameter-preview":
+      if (state.busy) break;
+      state.busy = true;
+      state.parameterReportMessage = "Fetching dated evidence.";
+      render();
+      try {
+        state.parameterPreview = await request("/api/parameter-run-report");
+        state.preferParameterPreview = true;
+        state.parameterReportMessage = "Evidence preview refreshed.";
+      } catch (error) {
+        state.parameterReportMessage = error.message;
+      } finally {
+        state.busy = false;
+        render();
+      }
+      break;
     case "catalogue-readiness":
       await loadFullCatalogue(false);
       break;

@@ -66,3 +66,11 @@ Set `SI_TRADER_SOURCE_MANIFEST` to a JSON file accessible to the dashboard serve
 These example endpoints are placeholders. Feed adapters or a provider-side export must normalize raw filings, APIs and vendor files into this schema. A public website URL is not a normalized endpoint.
 
 **Full 48 research → Check full catalogue** retrieves configured sources and displays each provider's status, counts, and source links. Existing NSE observations and the legacy full-catalogue file still work. When a parameter needs fallback data, the newest valid observation is used. Equally recent values that disagree, or conflicting fresh risk observations, remain unknown. Stale or future-dated inputs cannot fill required coverage. The model receives the validated evidence in the Full 48 screen and Three-agent review. The monthly builder receives observed coverage and numeric summaries as hypothesis context. Monthly backtests still use their own point-in-time historical bundle.
+
+## 48-Parameter Run Report
+
+On **Weekly** or **Monthly**, open **48-Parameter Run Report** and select **Refresh evidence preview**. The preview works without Ollama. Each parameter shows its role, strategy use, coverage, missing or conflicting observations, latest date, and source links. The provider section includes fetch failures and empty responses.
+
+A weekly paper run records the actual ranking weights and the number of stocks excluded by dated filters or vetoes. Select a stock in the simulated basket to see its linked observations. A missing check stays unknown. The weekly cost/edge control still requires independently supported forecasts before the catalogue can classify that parameter as observed. The monthly factor proposal records all 48 coverage counts. A historical backtest uses its separate dated input bundle.
+
+The report pulls NSE corporate disclosures and actions alongside the existing price, valuation, and ownership inputs. It also checks the [SEBI RSS feed](https://www.sebi.gov.in/rss.html) for dated market-wide announcements. Those headlines can flag an announcement and do not establish stock-level enforcement status. An empty RSS response or unsuccessful fetch leaves the field unobserved. The report records known risk exclusions separately from the completeness of the feed.

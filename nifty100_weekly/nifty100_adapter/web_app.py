@@ -11,7 +11,7 @@ from .ai_strategy import generate_plan, installed_models
 from .backtest.weekly_backtester import WeeklyBacktester
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
-from .full_catalogue import full_catalogue
+from .full_catalogue import full_catalogue, readiness, run_report, weekly_risk_screen
 from .investright import broker_get, holdings_count
 from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
@@ -69,6 +69,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, collect_evidence(frame, market))
             elif self.path == "/api/catalogue-readiness":
                 self.send_json(200, full_catalogue())
+            elif self.path == "/api/parameter-run-report":
+                frame, market = load_nifty100()
+                coverage, records = readiness(frame, market)
+                self.send_json(200, run_report(coverage, records, "preview"))
             elif self.path == "/api/strategy-lab":
                 self.send_json(200, pulse())
             elif self.path == "/api/models":
@@ -134,8 +138,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 profile = validate_profile(parameters)
                 configured_scores = score_parameters(profile)
                 frame, market = load_nifty100()
+                coverage, records = readiness(frame, market)
+                paper_universe, rejected = weekly_risk_screen(frame, records)
+                complete_checks = {row["key"] for row in coverage["parameters"] if row["ready"]}
+                risk_labels = {
+                    "asm_gsm_surveillance": "ASM/GSM surveillance", "promoter_pledging_pct": "promoter pledging",
+                    "legal_cases_directors": "legal cases", "regulatory_actions": "regulatory actions",
+                }
+                market["unverifiedChecks"] = [label for key, label in risk_labels.items() if key not in complete_checks]
                 available = frame.set_index("symbol")
-                strategy = WeeklyBacktester(frame, top_n=20)
+                strategy = WeeklyBacktester(paper_universe, top_n=20)
                 strategy.score_calc.score_params = configured_scores
                 result = strategy.run_weekly_pipeline()
                 candidates = result["selection"]
@@ -173,7 +185,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "parameters": parameters,
                     "model": model,
                     "market": market,
-                    "considered": result["total_considered"],
+                    "considered": len(frame),
+                    "parameterRunReport": run_report(
+                        coverage, records, "weekly", configured_scores, rejected,
+                        tuple(item["symbol"] for item in execution["basket"]),
+                    ),
                     "message": result.get("message", ""),
                 })
             else:

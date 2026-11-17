@@ -99,7 +99,7 @@ def normalize_preferences(preferences, tilt):
 
 def build_research_strategy(model, objective):
     from .data.nse_market import load_nifty100
-    from .full_catalogue import readiness
+    from .full_catalogue import readiness, run_report
 
     frame, market = load_nifty100()
     coverage, records = readiness(frame, market)
@@ -108,7 +108,7 @@ def build_research_strategy(model, objective):
     }
     observed = {
         item["key"]: [item["available"], item["expected"]]
-        for item in coverage["parameters"] if item["available"]
+        for item in coverage["parameters"]
     }
     analytical_inputs = ("debt_equity_ratio", "interest_coverage", "pe_ratio_vs_sector",
                          "promoter_holding_pct", "promoter_pledging_pct", "price_momentum_weekly")
@@ -165,7 +165,8 @@ def build_research_strategy(model, objective):
         "created_at": datetime.now(timezone.utc).isoformat(), "model": model, "objective": objective,
         "hypothesis": TILTS[tilt], "weights": weights, "baseline_weights": WEIGHTS,
         "catalogue_status": availability_counts, "evidence_as_of": coverage["market"]["asOf"],
-        "source_feeds": coverage["sourceFeeds"], "risks": [RISKS[code] for code in flags],
+        "source_feeds": coverage["sourceFeeds"],
+        "parameterRunReport": run_report(coverage, records, "monthly"), "risks": [RISKS[code] for code in flags],
         "blockers": [
             "Supply a point-in-time monthly dataset and freeze an unseen evaluation period.",
             "Compare net CAGR, rolling returns and drawdown to the fixed monthly baseline and Nifty 100 TRI.",

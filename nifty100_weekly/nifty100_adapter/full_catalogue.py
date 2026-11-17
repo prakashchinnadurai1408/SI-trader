@@ -13,6 +13,7 @@ from .config.parameter_catalogue import RoleType
 from .data.catalogue_evidence import local_evidence, observation, ownership_data, pe_data
 from .data.nse_market import MARKET_TIME, load_nifty100
 from .data.provider_sources import consolidate, load_sources
+from .data.public_research import collect_public_records
 from .strategy_builder import agent
 
 MARKET_FACTORS = {
@@ -105,7 +106,11 @@ def readiness(frame, market, provider_path=None, now=None):
     day = date.fromisoformat(market["asOf"])
     cutoff = min(now or datetime.now(MARKET_TIME), datetime.combine(day, time.max, tzinfo=MARKET_TIME))
     members = {row.symbol: row for row in frame.itertuples(index=False)}
-    records = native_records(frame, members, day, cutoff)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        native = executor.submit(native_records, frame, members, day, cutoff)
+        public, public_feeds = collect_public_records(members, day, cutoff)
+        records = native.result()
+    records.update(public)
     path = provider_path if provider_path is not None else os.environ.get("SI_TRADER_FULL_CATALOGUE_FEED")
     errors = []
     if len(members) != 100 or market["universeSize"] != 100:
@@ -164,7 +169,7 @@ def readiness(frame, market, provider_path=None, now=None):
     return {
         "ready": complete == len(PARAMETERS) and not errors,
         "complete": complete, "total": len(PARAMETERS), "market": market,
-        "parameters": parameters, "providerConfigured": bool(path or manifest), "errors": errors, "sourceFeeds": feeds,
+        "parameters": parameters, "providerConfigured": bool(path or manifest), "errors": errors, "sourceFeeds": [*public_feeds, *feeds],
     }, records
 
 
@@ -178,6 +183,57 @@ def passes(key, role, value):
     if key == "cost_vs_edge_check":
         return value > 0
     return value if role == RoleType.FILTER else not value
+
+
+def run_report(coverage, records, mode, scores=(), weekly_rejections=None, symbols=()):
+    score_weights = {item.parameter_key: item.weight for item in scores}
+    rows = []
+    for item in coverage["parameters"]:
+        key = item["key"]
+        rejected = weekly_rejections.get(key, 0) if weekly_rejections is not None else None
+        if key in score_weights:
+            use = "Ranking input"
+        elif weekly_rejections is not None and item["role"] in ("Filter", "Veto") and key not in RATES and item["available"]:
+            use = "Paper eligibility check"
+        elif mode == "monthly" and item["available"]:
+            use = "Proposal context"
+        else:
+            use = "Coverage only"
+        rows.append({
+            **item, "use": use, "weight": score_weights.get(key), "excludedStocks": rejected,
+            "unknown": item["expected"] - item["available"],
+        })
+    for row in rows:
+        key = row["key"]
+        definition = PARAMETERS[key]
+        row["stockEvidence"] = {}
+        for symbol in symbols:
+            record = records[key].get("*" if key in MARKET_FACTORS else symbol)
+            if record is None:
+                continue
+            outcome = None
+            if definition.role_type in (RoleType.FILTER, RoleType.VETO) and key not in RATES:
+                outcome = "Pass" if passes(key, definition.role_type, record["value"]) else "Excluded"
+            row["stockEvidence"][symbol] = {
+                "value": record["value"], "asOf": record["asOf"], "source": record["source"], "outcome": outcome,
+            }
+    return {"mode": mode, "marketAsOf": coverage["market"]["asOf"], "complete": coverage["complete"],
+            "total": coverage["total"], "rows": rows, "symbols": list(symbols), "sourceFeeds": coverage["sourceFeeds"], "errors": coverage["errors"]}
+
+
+def weekly_risk_screen(frame, records):
+    excluded = set()
+    rejections = {}
+    for key, definition in PARAMETERS.items():
+        if definition.role_type not in (RoleType.FILTER, RoleType.VETO) or key in RATES:
+            continue
+        failures = {symbol for symbol, record in records[key].items()
+                    if not passes(key, definition.role_type, record["value"])}
+        if "*" in failures:
+            failures = set(frame["symbol"])
+        rejections[key] = len(failures)
+        excluded.update(failures)
+    return frame.loc[~frame["symbol"].isin(excluded)].copy(), rejections
 
 
 def rank_complete(frame, evidence, records, model, objective):
