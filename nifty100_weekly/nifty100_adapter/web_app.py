@@ -3,6 +3,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 from pathlib import Path
 
 from .ai_parameters import availability, catalogue_view, propose_profile, score_parameters, validate_profile
@@ -14,6 +15,7 @@ from .full_catalogue import full_catalogue
 from .investright import broker_get, holdings_count
 from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
+from .strategy_lab import pulse, run_diagnostics
 from .strategy_builder import build_research_strategy
 from .trading_workspace import ENDPOINTS, affordable_candidates, broker_snapshot, cash_amount, number, paper_sizing
 
@@ -67,15 +69,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, collect_evidence(frame, market))
             elif self.path == "/api/catalogue-readiness":
                 self.send_json(200, full_catalogue())
+            elif self.path == "/api/strategy-lab":
+                self.send_json(200, pulse())
             elif self.path == "/api/models":
                 self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee"):
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("Provide a strategy configuration.")
+                if self.path == "/api/quant-diagnostics":
+                    symbol = payload.get("symbol")
+                    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._&-]{0,29}", symbol):
+                        raise ValueError("Choose a valid NSE symbol.")
+                    self.send_json(200, run_diagnostics(symbol, payload.get("horizon")))
+                    return
                 model = payload.get("model")
                 objective = payload.get("objective")
                 max_positions = payload.get("maxPositions")

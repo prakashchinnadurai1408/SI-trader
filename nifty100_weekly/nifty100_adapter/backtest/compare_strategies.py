@@ -16,12 +16,13 @@ from ..strategy_builder import validate_weights
 
 def load_report(folder, strategy):
     report = json.loads((folder / "report.json").read_text(encoding="utf-8-sig"))
-    if report.get("strategy") != strategy:
-        raise ValueError(f"Expected a {strategy} report.")
+    actual = report.get("strategy")
+    if actual != strategy and not (strategy == "monthly_challenger" and actual == "monthly_defensive"):
+        raise ValueError(f"Expected a {strategy} or matching alternative report.")
     weights = report["factor_weights"]
-    if strategy == "monthly_baseline" and weights != WEIGHTS:
+    if actual in ("monthly_baseline", "monthly_defensive") and weights != WEIGHTS:
         raise ValueError("Baseline weights differ from the frozen scorecard.")
-    if strategy == "monthly_challenger":
+    if actual == "monthly_challenger":
         validate_weights(weights)
     hashes = report["input_sha256"]
     if not isinstance(hashes, dict) or set(hashes) != set(INPUTS) or any(
@@ -38,6 +39,27 @@ def load_report(folder, strategy):
     ):
         raise ValueError(f"{strategy} daily equity file is invalid.")
     return report, equity
+
+
+def downside_metrics(equity):
+    monthly = equity.groupby(equity.index.to_period("M")).last().pct_change().dropna()
+    negative = monthly.loc[monthly["benchmark"].lt(0)]
+    capture = None
+    if not negative.empty:
+        compounded = (1 + negative).prod() - 1
+        capture = float(compounded["equity"] / compounded["benchmark"] * 100)
+
+    nav = equity["equity"]
+    drawdown = 1 - nav / nav.cummax()
+    trough = drawdown.idxmax()
+    peak = nav.loc[:trough].idxmax()
+    recovered = nav.loc[trough:]
+    recovered = recovered[recovered.ge(nav.loc[peak])]
+    duration = None if recovered.empty else int(nav.index.get_loc(recovered.index[0]) - nav.index.get_loc(peak))
+    return {
+        "negative_benchmark_months": len(negative), "downside_capture_pct": capture,
+        "worst_drawdown_to_recovery_sessions": duration,
+    }
 
 
 def compare_runs(baseline_dir, challenger_dir):
@@ -68,7 +90,7 @@ def compare_runs(baseline_dir, challenger_dir):
     )
     return {
         "status": "research_comparison" if research and len(months) >= 60 else "inconclusive",
-        "months": len(months), "baseline_weights": WEIGHTS, "challenger_weights": challenger["factor_weights"],
+        "months": len(months), "variant": challenger["strategy"], "baseline_weights": WEIGHTS, "challenger_weights": challenger["factor_weights"],
         "baseline_total_roi_pct": base_roi * 100, "challenger_total_roi_pct": challenger_roi * 100,
         "roi_difference_pp": (challenger_roi - base_roi) * 100,
         "relative_roi_improvement_pct": relative * 100 if relative is not None else None,
@@ -80,6 +102,7 @@ def compare_runs(baseline_dir, challenger_dir):
         "challenger_max_drawdown_pct": challenger_metrics["maximum_daily_drawdown"] * 100,
         "challenger_vs_baseline_36m_wins": paired["rolling_36m_wins"],
         "rolling_36m_windows": paired["rolling_36m_windows"],
+        "baseline_downside": downside_metrics(left), "variant_downside": downside_metrics(right),
         "warning": "A comparison is historical. The challenger cannot approve a pilot or live orders.",
     }
 

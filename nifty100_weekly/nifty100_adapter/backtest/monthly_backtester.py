@@ -222,7 +222,14 @@ class Portfolio:
                 sector_value[stock.sector] = sector_value.get(stock.sector, 0) + qty * price
                 turnover_room -= qty * price
 
-def month_end_signal(prices, snapshots, tri, decision, weights=None):
+def defensive_exposure(observed):
+    month_ends = observed.groupby(observed.index.to_period("M")).last().tail(10)
+    if len(month_ends) < 10 or month_ends.index[-1].ordinal - month_ends.index[0].ordinal != 9:
+        raise ValueError("The defensive variant needs ten consecutive completed month-end TRI observations.")
+    return 0.25 if month_ends.iloc[-1] < month_ends.mean() else 0.95
+
+
+def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=False):
     if decision not in snapshots.index.get_level_values("date"):
         raise ValueError(f"Missing point-in-time Nifty 100 snapshot for {decision.date()}.")
     snapshot = snapshots.loc[decision]
@@ -238,17 +245,19 @@ def month_end_signal(prices, snapshots, tri, decision, weights=None):
     exposure = 0.95 * min(1.0, 0.18 / vol) if vol else 0.95
     if observed.iloc[-1] / observed.tail(21).max() - 1 <= -0.10:
         exposure = min(exposure, 0.50)
+    if defensive:
+        exposure = defensive_exposure(observed)
     return scores, snapshot, float(exposure), scoreable
 
 
-def build_signals(prices, snapshots, tri, dates, complete_months, weights=None):
+def build_signals(prices, snapshots, tri, dates, complete_months, weights=None, defensive=False):
     sessions = pd.Series(tri.index, index=tri.index.to_period("M"))
     signals = {}
     coverage = []
     for month in complete_months - 1:
         previous = sessions.loc[month]
         decision = previous.iloc[-1] if isinstance(previous, pd.Series) else previous
-        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights)
+        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights, defensive)
         execution = dates[dates.to_period("M") == month + 1][0]
         signals[execution] = (scores, snapshot, exposure, decision)
         coverage.append({"decision": str(decision.date()), "execution": str(execution.date()),
@@ -270,13 +279,15 @@ def research_window(tri, start, end):
     return complete_months, dates
 
 
-def run(folder, start, end, capital, weights=None):
+def run(folder, start, end, capital, weights=None, defensive=False):
+    if defensive and weights is not None:
+        raise ValueError("Test the defensive overlay separately with the frozen factor weights.")
     manifest, prices, snapshots, tri = load_inputs(folder)
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("Starting capital must be finite and positive.")
     complete_months, dates = research_window(tri, start, end)
     baseline = tri.index[tri.index < dates[0]][-1]
-    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights)
+    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights, defensive)
     week_ends = set(dates.to_series().groupby(dates.to_period("W-FRI")).max())
     ledger = [{"date": baseline, "equity": capital, "cash": capital, "benchmark": float(tri.loc[baseline])}]
     peak_nav = capital
@@ -308,11 +319,12 @@ def run(folder, start, end, capital, weights=None):
         if day in week_ends and nav <= peak_nav * (1 - DRAWDOWN_ALERT):
             portfolio.alerts.append({"date": str(day.date()), "type": "weekly_drawdown", "value": 1 - nav / peak_nav})
     equity = pd.DataFrame.from_records(ledger).set_index("date")
-    gate = gate_g1(equity, complete_months, manifest["mode"] == "research" and weights is None)
-    if weights is not None:
-        gate["qualification_note"] = "AI challenger is research only. It cannot authorize the frozen Gate G1 pilot."
+    strategy_name = "monthly_defensive" if defensive else "monthly_challenger" if weights is not None else "monthly_baseline"
+    gate = gate_g1(equity, complete_months, manifest["mode"] == "research" and strategy_name == "monthly_baseline")
+    if strategy_name != "monthly_baseline":
+        gate["qualification_note"] = "An experimental variant cannot authorize the frozen Gate G1 pilot."
     return equity, {
-        "gate_g1": gate, "strategy": "monthly_baseline" if weights is None else "monthly_challenger",
+        "gate_g1": gate, "strategy": strategy_name,
         "factor_weights": WEIGHTS if weights is None else weights,
         "input_sha256": {name: file_hash(Path(folder) / name) for name in INPUTS},
         "start_month": str(complete_months[0]), "end_month": str(complete_months[-1]),
@@ -329,7 +341,9 @@ def main():
     parser.add_argument("--end", required=True, help="Last test month (YYYY-MM)")
     parser.add_argument("--capital", type=float, default=1000000)
     parser.add_argument("--out", type=Path, required=True, help="New report directory")
-    parser.add_argument("--challenger", type=Path, help="Exported AI proposal, evaluated for research only")
+    experiment = parser.add_mutually_exclusive_group()
+    experiment.add_argument("--challenger", type=Path, help="Exported AI proposal, evaluated for research only")
+    experiment.add_argument("--defensive", action="store_true", help="Test the 10-month trend overlay")
     args = parser.parse_args()
     try:
         if args.challenger:
@@ -337,7 +351,7 @@ def main():
             weights = read_challenger(args.challenger)
         else:
             weights = None
-        equity, report = run(args.data, args.start, args.end, args.capital, weights)
+        equity, report = run(args.data, args.start, args.end, args.capital, weights, args.defensive)
         args.out.mkdir(parents=True, exist_ok=False)
         equity.to_csv(args.out / "daily_equity.csv")
         (args.out / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")

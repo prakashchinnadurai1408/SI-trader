@@ -14,7 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
-  models: [], committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
+  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -466,8 +466,67 @@ function committeeView() {
   </section>`;
 }
 
+function strategyLab() {
+  const lab = state.lab;
+  const result = state.labResult;
+  const metrics = [
+    ["Beta vs Nifty 100 TRI", "beta"], ["Annualized regression intercept", "annualizedInterceptPct", "%"],
+    ["EWMA volatility, annualized", "ewmaVolPct", "%"], ["21-session momentum", "momentum21Pct", "%"],
+    ["63-session momentum", "momentum63Pct", "%"], ["14-session RSI", "rsi14"], ["14-session ATR", "atr14", " INR"],
+  ];
+  return `<div class="desk-lab">
+    <section class="card desk-run">
+      <div><h2>Nifty 100 research workspace</h2><p>Compare monthly strategy ideas, inspect market breadth, and test stock downside scenarios.</p></div>
+      <button data-action="load-lab" ${state.busy ? "disabled" : ""}>${state.busy ? "Working…" : "Refresh NSE snapshot"}</button>
+      ${feedback()}
+    </section>
+    ${lab ? `<div class="desk-metrics">
+      ${metric("Stocks up", count(lab.breadth.up), "Of " + count(lab.breadth.dailyCovered) + " with daily data")}
+      ${metric("Stocks down", count(lab.breadth.down), "Flat: " + count(lab.breadth.flat))}
+      ${metric("Median five-session move", percent(lab.breadth.medianFivePct), "Nifty 100 constituents")}
+      ${metric("NSE close", escapeHtml(lab.market.asOf), lab.market.covered + "/" + lab.market.universeSize + " covered")}
+    </div>
+    <section class="card desk-card">
+      <div class="desk-card-header"><h2>Research strategies</h2><span class="desk-tag">Paper research</span></div>
+      ${gridTable(["Strategy", "What to test"], lab.presets.map(item =>
+        [escapeHtml(item.name), escapeHtml(item.description)]), "")}
+      <div class="actions desk-copy">
+        <button class="secondary" data-action="tab" data-tab="builder">Build an AI challenger</button>
+        <button class="secondary" data-action="tab" data-tab="committee">Open three-agent review</button>
+        <button class="secondary" data-action="tab" data-tab="full">Check full catalogue</button>
+      </div>
+    </section>
+    <section class="card desk-card">
+      <div class="desk-card-header"><h2>Industry breadth</h2></div>
+      ${gridTable(["Industry", "Stocks", "Median five-session move"], lab.industries.map(item =>
+        [escapeHtml(item.name), count(item.covered), percent(item.median_five_pct)]), "No industry had enough observations.")}
+    </section>
+    <section class="card desk-feeds">
+      <div class="desk-card-header"><h2>Stock diagnostics</h2><span class="desk-tag">Scenario analysis</span></div>
+      <form id="quant-diagnostics" class="desk-copy">
+        <label for="lab-symbol">NSE stock</label>
+        <select id="lab-symbol" name="symbol" required ${!lab.historyConfigured ? "disabled" : ""}>
+          <option value="">Choose a symbol</option>${lab.symbols.map(symbol =>
+            `<option value="${escapeHtml(symbol)}" ${state.labSymbol === symbol ? "selected" : ""}>${escapeHtml(symbol)}</option>`).join("")}
+        </select>
+        <label for="lab-horizon">Trading sessions</label>
+        <input id="lab-horizon" name="horizon" type="number" min="5" max="30" value="${count(state.labHorizon)}" required ${!lab.historyConfigured ? "disabled" : ""}>
+        <div class="actions"><button ${state.busy || !lab.historyConfigured ? "disabled" : ""}>Run stock diagnostics</button></div>
+      </form>
+      ${!lab.historyConfigured ? '<p class="desk-copy note">Set SI_TRADER_STRATEGY_BUNDLE in the server environment to enable diagnostics on verified-format historical inputs.</p>' : ""}
+      ${result ? `<p class="desk-copy"><strong>${escapeHtml(result.symbol)}</strong> · ${escapeHtml(result.asOf)} · ${count(result.sessions)} sessions · Close ${cash(result.close)}</p>
+        ${gridTable(["Diagnostic", "Value"], metrics.map(([label, key, suffix]) => [label, count(result.metrics[key]) + (suffix || "")]), "")}
+        <details class="desk-copy" open><summary>Simulated return range</summary>
+          <p class="note">${escapeHtml(result.stress.assumption)}. Scenario percentiles do not predict actual returns.</p>
+          ${gridTable(["Session", ...result.stress.percentiles.map(value => "P" + value)],
+            result.stress.days.map((day, i) => [count(day), ...result.stress.returnsPct[i].map(percent)]), "")}
+        </details>` : ""}
+    </section>` : ""}
+  </div>`;
+}
+
 function dashboard() {
-  const tabs = [["overview", "Strategy overview"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
+  const tabs = [["overview", "Strategy overview"], ["lab", "Strategy Lab"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
   const linked = state.snapshot && ["funds", "holdings", "positions", "orders", "trades"].some(key => state.snapshot[key]?.value !== undefined);
   return `<div class="desk">
     <aside class="desk-nav">
@@ -488,13 +547,13 @@ function dashboard() {
           <button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>
         </div>
       </header>
-      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() : overview()}
+      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() : state.tab === "lab" ? strategyLab() : overview()}
     </main>
   </div>`;
 }
 
 setInterval(() => {
-  if (state.view === "dashboard" && state.tab !== "builder" && !document.hidden) refreshBroker();
+  if (state.view === "dashboard" && !["builder","lab"].includes(state.tab) && !document.hidden) refreshBroker();
 }, 30000);
 
 function render() {
@@ -542,6 +601,21 @@ app.addEventListener("submit", async event => {
     }
     state.view = "broker";
     show();
+  } else if (event.target.id === "quant-diagnostics" && !state.busy) {
+    state.labSymbol = form.get("symbol");
+    state.labHorizon = Number(form.get("horizon"));
+    state.labResult = null;
+    state.busy = true;
+    show("Calculating stock diagnostics.");
+    try {
+      state.labResult = await request("/api/quant-diagnostics", {symbol: state.labSymbol, horizon: state.labHorizon});
+      show("Historical diagnostics ready.");
+    } catch (error) {
+      show(error.message, true);
+    } finally {
+      state.busy = false;
+      render();
+    }
   } else if (event.target.id === "research-committee" && !state.busy && config.model) {
     const holdings = form.get("holdings").split(",").map(item => item.trim().toUpperCase()).filter(Boolean);
     state.busy = true;
@@ -658,6 +732,20 @@ app.addEventListener("click", async event => {
       break;
     case "full-catalogue":
       if (state.fullCatalogue?.ready && config.model) await loadFullCatalogue(true);
+      break;
+    case "load-lab":
+      if (state.busy) break;
+      state.busy = true;
+      show("Fetching current Nifty 100 coverage.");
+      try {
+        state.lab = await request("/api/strategy-lab");
+        show("NSE research snapshot ready.");
+      } catch (error) {
+        show(error.message, true);
+      } finally {
+        state.busy = false;
+        render();
+      }
       break;
     case "load-evidence":
       if (state.busy) break;
