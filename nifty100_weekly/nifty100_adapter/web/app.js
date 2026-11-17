@@ -14,8 +14,8 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
-  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null,
-  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
+  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
+  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -45,8 +45,8 @@ function signIn() {
   return `<main class="sign">
     <section class="hero">
       <div class="brand">Nifty100 WeeklyAlpha</div>
-      <h1>Run your weekly Nifty 100 plan inside limits you set.</h1>
-      <p>Paper mode by default. Review and approve your weekly basket before recording it as a paper plan.</p>
+      <h1>Build and test Nifty 100 strategies.</h1>
+      <p>Run weekly strategies with simulated fills, or test a monthly strategy against historical data.</p>
       ${paper}
     </section>
     <section class="card">
@@ -244,7 +244,24 @@ function metric(label, value, detail) {
   return `<section class="card desk-metric"><h2>${label}</h2><strong>${value}</strong><span>${detail}</span></section>`;
 }
 
-function overview() {
+function home() {
+  return `<div class="desk-strategy-cards">
+    <section class="card">
+      <h2>Weekly strategy</h2>
+      <p>Generate a cash-sized Nifty 100 basket and review the simulated fills.</p>
+      <p class="note">${config.model ? "Model selected · " + escapeHtml(config.model) : "Setup required · Select an Ollama model"}</p>
+      <button data-action="tab" data-tab="weekly">Open weekly strategy</button>
+    </section>
+    <section class="card">
+      <h2>Monthly strategy</h2>
+      <p>Generate an AI factor proposal and compare it with the fixed and defensive strategies.</p>
+      <p class="note">Historical backtests require a point-in-time research bundle.</p>
+      <button data-action="tab" data-tab="monthly">Open monthly strategy</button>
+    </section>
+  </div>`;
+}
+
+function weekly() {
   const plan = state.plan;
   const run = plan?.execution;
   const market = plan?.market;
@@ -265,7 +282,9 @@ function overview() {
     </div>
     <section class="card desk-run">
       <div><h2>Weekly AI strategy</h2><p>${config.model ? escapeHtml(config.model) + " · " + escapeHtml(source) + " · " + (config.execution.paperAuto ? "Automatic paper fills" : "Preview only") : "Choose a model and capital source in Strategy settings."}</p></div>
-      <form id="strategy"><button ${state.busy || state.halted || !config.model ? "disabled" : ""}>${state.busy ? "Running strategy…" : "Run AI strategy"}</button></form>
+      <form id="strategy"><button ${state.busy || state.halted || !config.model ? "disabled" : ""}>${state.busy ? "Running strategy…" : "Run weekly strategy"}</button></form>
+      ${!config.model ? '<div class="actions"><button class="secondary" data-action="config">Set up Ollama model</button></div>' : ""}
+      ${state.halted ? '<p role="status">Weekly paper runs are paused. Select Reset kill switch to continue.</p>' : ""}
       ${feedback()}
     </section>
     <div class="desk-analysis">
@@ -277,7 +296,7 @@ function overview() {
           <p class="desk-copy note">Live checks pending: ${escapeHtml(market.unverifiedChecks.join(", "))}.</p>` : ""}
       </section>
       <section class="card desk-card roi">
-        <div class="desk-card-header"><h2>Modeled ROI</h2></div>
+        <div class="desk-card-header"><h2>Price-move scenario</h2></div>
         <p>Net scenarios after estimated costs and taxes.</p>
         ${["Downside", "Flat price", "Upside"].map((label, index) => `<div class="roi-row"><span>${label}
           ${run ? ["−" + run.scenarioMove + "%", "0%", "+" + run.scenarioMove + "%"][index] : ""}</span>
@@ -311,15 +330,16 @@ function builder() {
     value: "Value", ownership: "Ownership", earnings_revisions: "Earnings revisions", news_sentiment: "News sentiment",
   };
   return `<section class="card desk-builder">
-    <div class="desk-card-header"><h2>Build a monthly research challenger</h2><span class="desk-tag">Research only</span></div>
+    <div class="desk-card-header"><h2>AI factor proposal</h2><span class="desk-tag">Research only</span></div>
     <p>One agent proposes factor weights. A second flags test risks. Compare the result to the frozen monthly baseline before using it.</p>
     <form id="strategy-builder" class="stack">
       <label for="research-objective">Research objective</label>
       <textarea id="research-objective" name="objective" rows="3" maxlength="500" required placeholder="Example: Test a stronger quality tilt while maintaining momentum and low-volatility exposure.">${escapeHtml(state.researchObjective)}</textarea>
-      <div class="actions"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Research agents working…" : "Build research strategy"}</button>
+      <div class="actions"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Research agents working…" : "Generate monthly proposal"}</button>
       ${plan ? '<button type="button" class="secondary" data-action="export-research">Export proposal</button>' : ""}</div>
     </form>
-    <p class="note">${config.model ? "Model: " + escapeHtml(config.model) : "Select an installed model in Strategy settings."} A verified holdout dataset is required to measure ROI.</p>
+    <p class="note">${config.model ? "Model: " + escapeHtml(config.model) : "Select an installed model to generate a proposal."}</p>
+    ${!config.model ? '<button class="secondary" data-action="config">Set up Ollama model</button>' : ""}
     ${feedback()}
     ${plan ? `<div class="builder-result">
       <h2>Test hypothesis</h2><p>${escapeHtml(plan.hypothesis)}</p>
@@ -374,7 +394,7 @@ function evidenceView() {
   return `<section class="card desk-feeds">
     <div class="desk-card-header"><h2>Parameter data coverage</h2><span class="desk-tag">Research evidence</span></div>
     <p class="desk-copy">Inspect what each feed supplied. Advisory data stays separate from score weights and veto decisions.</p>
-    <div class="actions desk-copy"><button data-action="load-evidence" ${state.busy ? "disabled" : ""}>${state.busy ? "Checking feeds…" : "Refresh data feeds"}</button></div>
+    <div class="actions desk-copy"><button data-action="load-evidence" ${state.busy ? "disabled" : ""}>${state.busy ? "Checking feeds…" : "Refresh data feeds"}</button><button class="secondary" data-action="tab" data-tab="full">Inspect full catalogue coverage</button></div>
     <div class="desk-copy">${feedback()}</div>
     ${result ? `<p class="desk-copy note">NSE close ${escapeHtml(result.market.asOf)} ·
       ${result.parameters.length} catalogue rows · ${observed} supplemental rows with NSE observations.
@@ -488,8 +508,9 @@ function monthlyComparison() {
     ]),
   ] : [];
   return `<section class="card desk-card">
-    <div class="desk-card-header"><h2>Monthly strategy comparison</h2><span class="desk-tag">Historical research</span></div>
-    <p class="desk-copy">Choose an unseen evaluation period and use the same prices, membership, benchmark and costs for every strategy.</p>
+    <div class="desk-card-header"><h2>Historical backtest</h2><span class="desk-tag">Historical research</span></div>
+    <p class="desk-copy">Enter an unseen holdout period. Check the historical bundle before running all strategies on the same data and costs.</p>
+    <p class="desk-copy note"><a href="https://github.com/prakashchinnadurai1408/SI-trader/blob/si-trader-app/nifty100_weekly/MONTHLY_BACKTEST.md#historical-data-intake" target="_blank" rel="noopener noreferrer">Set up the historical data bundle</a></p>
     <form id="monthly-comparison" class="desk-copy">
       <label for="monthly-start">First holdout month</label>
       <input id="monthly-start" name="start" type="month" required value="${escapeHtml(inputs.start)}">
@@ -497,9 +518,10 @@ function monthlyComparison() {
       <input id="monthly-end" name="end" type="month" required value="${escapeHtml(inputs.end)}">
       <label for="monthly-capital">Starting capital (INR)</label>
       <input id="monthly-capital" name="capital" type="number" min="1" max="1000000000" required value="${escapeHtml(inputs.capital)}">
-      <label><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
+      <label class="check"><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
         ${state.researchProposal ? "" : "disabled"}> Include the current AI factor challenger</label>
-      ${state.researchProposal ? "" : '<p class="note">Generate a challenger in the AI strategy builder to include it here.</p>'}
+      ${state.researchProposal ? "" : '<p class="note">Generate a monthly proposal above to include it here.</p>'}
+      ${state.monthlyFeedback ? `<p class="message ${state.monthlyError ? "error" : ""}" role="${state.monthlyError ? "alert" : "status"}">${escapeHtml(state.monthlyFeedback)}</p>` : ""}
       <div class="actions">
         <button class="secondary" value="check" ${state.busy ? "disabled" : ""}>Check data readiness</button>
         <button value="run" ${state.busy ? "disabled" : ""}>Run monthly comparison</button>
@@ -530,7 +552,6 @@ function strategyLab() {
       <button data-action="load-lab" ${state.busy ? "disabled" : ""}>${state.busy ? "Working…" : "Refresh NSE snapshot"}</button>
       ${feedback()}
     </section>
-    ${monthlyComparison()}
     ${lab ? `<div class="desk-metrics">
       ${metric("Stocks up", count(lab.breadth.up), "Of " + count(lab.breadth.dailyCovered) + " with daily data")}
       ${metric("Stocks down", count(lab.breadth.down), "Flat: " + count(lab.breadth.flat))}
@@ -542,7 +563,7 @@ function strategyLab() {
       ${gridTable(["Strategy", "What to test"], lab.presets.map(item =>
         [escapeHtml(item.name), escapeHtml(item.description)]), "")}
       <div class="actions desk-copy">
-        <button class="secondary" data-action="tab" data-tab="builder">Build an AI challenger</button>
+        <button class="secondary" data-action="tab" data-tab="monthly">Open monthly strategy</button>
         <button class="secondary" data-action="tab" data-tab="committee">Open three-agent review</button>
         <button class="secondary" data-action="tab" data-tab="full">Check full catalogue</button>
       </div>
@@ -577,34 +598,52 @@ function strategyLab() {
 }
 
 function dashboard() {
-  const tabs = [["overview", "Strategy overview"], ["lab", "Strategy Lab"], ["builder", "AI strategy builder"], ["watchlist", "Top 10 watchlist"], ["feeds", "Data feeds"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["portfolio", "Holdings & positions"], ["execution", "Execution"]];
+  const primary = [["home", "Home"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["feeds", "Data feeds"], ["portfolio", "Portfolio"]];
+  const tools = [["lab", "Strategy Lab"], ["watchlist", "Top 10 watchlist"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["execution", "Execution"]];
+  const titles = {weekly: "Weekly strategy", monthly: "Monthly strategy"};
+  const title = titles[state.tab] || [...primary, ...tools].find(([key]) => key === state.tab)[1];
+  const navButton = ([key, label]) => `<button data-action="tab" data-tab="${key}" ${state.tab === key ? 'aria-current="page"' : ""}>${label}</button>`;
+  const brokerTab = ["portfolio", "execution"].includes(state.tab);
   const linked = state.snapshot && ["funds", "holdings", "positions", "orders", "trades"].some(key => state.snapshot[key]?.value !== undefined);
   return `<div class="desk">
     <aside class="desk-nav">
       <div class="desk-brand"><span aria-hidden="true">W</span><div>WeeklyAlpha<small>Nifty 100 workspace</small></div></div>
       <nav aria-label="Trading workspace">
-        ${tabs.map(([key, label]) => `<button data-action="tab" data-tab="${key}" ${state.tab === key ? 'aria-current="page"' : ""}>${label}</button>`).join("")}
-        <button data-action="config" ${state.busy ? "disabled" : ""}>Strategy settings</button>
+        <div class="desk-primary-links">
+          ${primary.map(navButton).join("")}
+          <button data-action="config" ${state.busy ? "disabled" : ""}>Settings</button>
+        </div>
+        <details class="desk-more-links" ${state.moreLinksOpen ? "open" : ""}>
+          <summary>Research &amp; execution</summary>
+          <div>${tools.map(navButton).join("")}</div>
+        </details>
       </nav>
       <div class="desk-nav-status">${paper}<small>InvestRight · Read-only</small></div>
     </aside>
     <main class="desk-main">
       <header class="desk-header">
-        <div><h1>${tabs.find(([key]) => key === state.tab)[1]}</h1>
-          <p><span class="connection-dot ${linked ? "connected" : ""}"></span>
-            ${linked ? "InvestRight snapshot · " + tradeTime(state.snapshot.asOf) + " IST" : "InvestRight data unavailable"} · refreshes every 30 s</p></div>
-        <div class="actions">
-          <button class="secondary" data-action="refresh" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Syncing…" : "Refresh broker"}</button>
-          <button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>
+        <div><h1 tabindex="-1">${title}</h1>
+          ${brokerTab ? `<p><span class="connection-dot ${linked ? "connected" : ""}"></span>
+            ${linked ? "InvestRight · Read-only · " + tradeTime(state.snapshot.asOf) + " IST" : "InvestRight · Read-only data unavailable"}</p>` : ""}
         </div>
+        ${brokerTab ? `<button class="secondary" data-action="refresh" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Syncing…" : "Refresh broker"}</button>` : ""}
+        ${state.tab === "weekly" ? `<button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>` : ""}
       </header>
-      ${state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() : state.tab === "builder" ? builder() : state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() : state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() : state.tab === "lab" ? strategyLab() : overview()}
+      ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}</div>` :
+        state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() :
+        state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() :
+        state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() :
+        state.tab === "lab" ? strategyLab() : state.tab === "weekly" ? weekly() : home()}
     </main>
   </div>`;
 }
 
+app.addEventListener("toggle", event => {
+  if (event.target.matches(".desk-more-links")) state.moreLinksOpen = event.target.open;
+}, true);
+
 setInterval(() => {
-  if (state.view === "dashboard" && !["builder","lab"].includes(state.tab) && !document.hidden) refreshBroker();
+  if (state.view === "dashboard" && ["portfolio", "execution"].includes(state.tab) && !document.hidden) refreshBroker();
 }, 30000);
 
 function render() {
@@ -631,6 +670,10 @@ async function request(path, body) {
 app.addEventListener("input", event => {
   if (event.target.id === "research-objective") state.researchObjective = event.target.value;
   if (event.target.id === "committee-holdings") state.committeeHoldings = event.target.value;
+  if (event.target.form?.id === "monthly-comparison") {
+    const field = event.target.name;
+    state.monthlyInputs[field] = field === "includeAI" ? event.target.checked : event.target.value;
+  }
 });
 
 app.addEventListener("submit", async event => {
@@ -658,13 +701,16 @@ app.addEventListener("submit", async event => {
       includeAI: form.has("includeAI")};
     state.monthlyResult = null;
     state.busy = true;
-    show(run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.");
+    state.monthlyFeedback = run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.";
+    state.monthlyError = false;
+    show();
     try {
       state.monthlyResult = await request("/api/monthly-comparison", {...state.monthlyInputs, run,
         challenger: state.monthlyInputs.includeAI ? state.researchProposal : null});
-      show();
+      state.monthlyFeedback = "";
     } catch (error) {
-      show(error.message, true);
+      state.monthlyFeedback = error.message;
+      state.monthlyError = true;
     } finally {
       state.busy = false;
       render();
@@ -724,7 +770,7 @@ app.addEventListener("submit", async event => {
       state.researchProposal = await request("/api/strategy-builder", {
         model: config.model, objective: state.researchObjective,
       });
-      show("Research proposal ready. Export it for matched backtests.");
+      show("Proposal ready. Include it in the historical backtest below or export it.");
     } catch (error) {
       show(error.message, true);
     } finally {
@@ -765,7 +811,6 @@ app.addEventListener("submit", async event => {
     config = { ...settings, parameters: matching ? prior.parameters : [] };
     localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
     state.draft = null;
-    state.tab = "overview";
     state.view = "dashboard";
     show("AI strategy configuration saved.");
   } else if (event.target.id === "strategy" && !state.busy && !state.halted && config.model) {
@@ -851,11 +896,14 @@ app.addEventListener("click", async event => {
     case "dashboard":
       state.view = "dashboard";
       show();
-      if (!state.snapshot) refreshBroker();
+      if (["portfolio", "execution"].includes(state.tab) && !state.snapshot) refreshBroker();
       break;
     case "tab":
       state.tab = event.target.closest("[data-tab]").dataset.tab;
-      render();
+      state.moreLinksOpen = ["lab", "watchlist", "full", "committee", "execution"].includes(state.tab);
+      show();
+      document.querySelector(".desk-header h1").focus();
+      if (state.tab === "weekly" || ["portfolio", "execution"].includes(state.tab)) refreshBroker();
       break;
     case "refresh":
       await refreshBroker();

@@ -150,9 +150,9 @@ td input { max-width: 90px; }
   .desk-analysis { grid-template-columns: 1fr; }
 }
 @media(max-width: 850px) {
-  .desk { grid-template-columns: 1fr; }
+  .desk { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .desk-nav { gap: 14px; padding: 16px 20px; }
-  .desk-nav nav { display: flex; flex-wrap: wrap; }
+  .desk-nav nav { gap: 8px; }
   .desk-nav-status { display: none; }
   .desk-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
@@ -180,3 +180,26 @@ td input { max-width: 90px; }
 .desk-feeds td:last-child { min-width: 140px; }
 .desk-lab select { display: block; width: min(100%, 280px); padding: 9px; margin-bottom: 10px; }
 .desk-lab input[type=number] { width: 105px; }
+
+.desk-primary-links, .desk-more-links > div { display: grid; gap: 4px; }
+.desk-more-links summary {
+  cursor: pointer; padding: 9px 12px; color: #dce8fa; font-size: 14px;
+}
+.desk-more-links > div { margin-top: 4px; }
+.desk-strategy-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.desk-strategy-cards .card { display: grid; justify-items: start; align-content: start; }
+.desk-strategy-cards .note { margin-bottom: 14px; }
+.desk-monthly { display: grid; gap: 16px; align-items: start; }
+.desk-monthly .desk-builder { max-width: none; }
+.desk-monthly .check { margin: 12px 0; }
+.desk-header h1:focus-visible { outline: 2px solid #087456; outline-offset: 4px; }
+@media (max-width: 850px) {
+  .desk-primary-links { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .desk-more-links > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 515px) {
+  .desk-nav { gap: 8px; padding: 12px; }
+  .desk-nav nav button { padding: 7px 8px; min-height: 36px; }
+  .desk-more-links summary { padding: 7px 8px; }
+  .desk-strategy-cards { grid-template-columns: 1fr; gap: 12px; }
+}

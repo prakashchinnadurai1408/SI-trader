@@ -1,6 +1,6 @@
 # Strategy Lab
 
-Open **Strategy Lab** from the paper dashboard, then select **Refresh NSE snapshot**. The snapshot shows the exchange's source date, market breadth, and industry-group median five-session returns. The AI builder, three-agent review, and 48-parameter evidence workspace remain available from the Lab.
+Open **Research & execution → Strategy Lab** from the paper dashboard, then select **Refresh NSE snapshot**. The snapshot shows the exchange's source date, market breadth, and industry-group median five-session returns. The Lab links to the Monthly workspace, three-agent review, and the 48-parameter evidence screen.
 
 ## Stock diagnostics
 
@@ -8,7 +8,7 @@ In PowerShell, set `$env:SI_TRADER_STRATEGY_BUNDLE` to a prepared [monthly resea
 
 ## Test the defensive monthly strategy
 
-In **Strategy Lab → Monthly strategy comparison**, enter the first and last holdout months and starting capital. **Check data readiness** lists missing files, calendar gaps, and membership coverage issues without calculating returns. **Run monthly comparison** checks readiness before comparing the baseline and defensive variant. Generate a proposal in **AI strategy builder** and select **Include the current AI factor challenger** to assess it on the same holdout. The comparison stays in the browser session. Use the CLI below for saved reports and the baseline evidence files used by the paper pilot.
+In **Monthly → Historical backtest**, enter the first and last holdout months and starting capital. **Check data readiness** lists missing files, calendar gaps, and membership coverage issues without calculating returns. **Run monthly comparison** checks readiness before comparing the baseline and defensive variant. Select **Generate monthly proposal** on the same page and select **Include the current AI factor challenger** to assess it on the same holdout. The comparison stays in the browser session. Use the CLI below for saved reports and the baseline evidence files used by the paper pilot.
 
 Run the fixed monthly baseline and the defensive overlay on identical point-in-time data, dates, capital, and costs. See [monthly backtest setup](MONTHLY_BACKTEST.md) for the baseline command. Repeat that command with `--defensive` and a new report directory. Pass that directory as `--challenger` to the existing comparison command. The defensive rule targets 25% equity below the 10-month average of completed Nifty 100 TRI month-end values and 95% otherwise. Order constraints govern how quickly it can reach the target. The comparison adds downside capture in negative benchmark months and time to recover from the worst drawdown. The baseline remains the eligibility path for the paper pilot.
 

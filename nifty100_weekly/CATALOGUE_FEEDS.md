@@ -43,7 +43,7 @@ The AI receives a summary of all 48 inputs and chooses positive weights for ever
 
 ## Three-agent review
 
-Open **Three-agent review**, choose an Ollama model and research objective in Strategy settings, and optionally enter NSE symbols you already hold. This workflow can run when the strict Full 48 research screen is blocked.
+Open **Research & execution → Three-agent review**, choose an Ollama model and research objective in **Settings**, and optionally enter NSE symbols you already hold. This workflow can run when the strict Full 48 research screen is blocked.
 
 - Maker receives coverage and observed signals across the catalogue and nominates up to six candidates from a short list. Complete scoring data determines the short list. Partial observations remain context.
 - Checker considers downside scenarios including drawdown, reversal, liquidity, correlation, costs, valuation, and events. It can exclude a name, reject the shortlist, or flag a holding for exit review.
