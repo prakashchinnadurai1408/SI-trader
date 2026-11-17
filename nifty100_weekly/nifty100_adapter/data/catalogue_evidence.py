@@ -177,6 +177,10 @@ def local_evidence(members, day, cutoff, path, global_keys=()):
         raw = stream.read(2_000_001)
     if len(raw) > 2_000_000:
         raise ValueError("Local feed evidence file is larger than 2 MB.")
+    return parse_evidence(members, day, cutoff, raw, global_keys)
+
+
+def parse_evidence(members, day, cutoff, raw, global_keys=(), require_isin=False):
     payload = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(payload, list):
         raise ValueError("Local evidence must contain a JSON array.")
@@ -188,6 +192,8 @@ def local_evidence(members, day, cutoff, path, global_keys=()):
         key, symbol, raw_date, url, value = (row.get(field) for field in ("parameter", "symbol", "asOf", "source", "value"))
         if not isinstance(key, str) or key not in PARAMETERS or not isinstance(symbol, str) or (symbol != "*" and symbol not in members):
             raise ValueError("Local evidence contains an unknown parameter or nonmember symbol.")
+        if require_isin and symbol != "*" and row.get("isin") != members[symbol].isin:
+            raise ValueError("Provider company observations must match the current constituent ISIN.")
         if symbol == "*" and key not in global_keys and PARAMETERS[key].role_type.value in ("Score", "Filter", "Veto"):
             raise ValueError(f"{key} needs company-specific observations.")
         stamp = datetime.fromisoformat(raw_date) if isinstance(raw_date, str) else None

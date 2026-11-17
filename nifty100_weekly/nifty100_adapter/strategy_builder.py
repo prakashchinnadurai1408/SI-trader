@@ -2,8 +2,8 @@
 
 from datetime import datetime, timezone
 import json
+from statistics import median
 
-from .ai_parameters import PARAMETERS, availability
 from .ai_strategy import ollama
 from .backtest.monthly_backtester import WEIGHTS
 
@@ -98,14 +98,29 @@ def normalize_preferences(preferences, tilt):
 
 
 def build_research_strategy(model, objective):
-    availability_counts = {}
-    for key in PARAMETERS:
-        status = availability(key)
-        availability_counts[status] = availability_counts.get(status, 0) + 1
+    from .data.nse_market import load_nifty100
+    from .full_catalogue import readiness
+
+    frame, market = load_nifty100()
+    coverage, records = readiness(frame, market)
+    availability_counts = {
+        "Complete": coverage["complete"], "Incomplete": coverage["total"] - coverage["complete"],
+    }
+    observed = {
+        item["key"]: [item["available"], item["expected"]]
+        for item in coverage["parameters"] if item["available"]
+    }
+    analytical_inputs = ("debt_equity_ratio", "interest_coverage", "pe_ratio_vs_sector",
+                         "promoter_holding_pct", "promoter_pledging_pct", "price_momentum_weekly")
+    medians = {
+        key: round(median(row["value"] for row in records[key].values()), 3)
+        for key in analytical_inputs if records[key]
+    }
     evidence = {
         "universe": "Nifty 100", "frequency": "monthly",
         "baseline": WEIGHTS, "candidate_factors": DIMENSIONS, "catalogue_status": availability_counts,
         "historical_coverage": "The builder has no verified point-in-time holdout bundle.",
+        "current_evidence": {"as_of": coverage["market"]["asOf"], "observed_required_counts": observed, "observed_medians": medians},
         "objective": objective,
     }
     proposal = agent(
@@ -113,6 +128,7 @@ def build_research_strategy(model, objective):
         "You propose a testable long-only monthly Nifty 100 factor challenger, not stock orders. "
         "Keep every factor named in the baseline. Provide relative integer weight preferences. The app normalizes them to 100 points. "
         "Use values from 0 to 45. The final core weights each need at least 10. "
+        "Use current evidence to frame a test hypothesis. Incomplete observations cannot establish a universe-wide finding. "
         "Change at least one weight. Return only the weights and one hypothesis category. No promised returns.",
         evidence,
         {**OBJECTS, "required": ["weights", "tilt"], "properties": {
@@ -148,7 +164,8 @@ def build_research_strategy(model, objective):
         "kind": "monthly_challenger", "schema_version": 1, "status": "research_only",
         "created_at": datetime.now(timezone.utc).isoformat(), "model": model, "objective": objective,
         "hypothesis": TILTS[tilt], "weights": weights, "baseline_weights": WEIGHTS,
-        "catalogue_status": availability_counts, "risks": [RISKS[code] for code in flags],
+        "catalogue_status": availability_counts, "evidence_as_of": coverage["market"]["asOf"],
+        "source_feeds": coverage["sourceFeeds"], "risks": [RISKS[code] for code in flags],
         "blockers": [
             "Supply a point-in-time monthly dataset and freeze an unseen evaluation period.",
             "Compare net CAGR, rolling returns and drawdown to the fixed monthly baseline and Nifty 100 TRI.",

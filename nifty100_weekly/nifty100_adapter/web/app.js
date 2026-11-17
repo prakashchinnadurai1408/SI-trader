@@ -325,7 +325,7 @@ function builder() {
       <h2>Test hypothesis</h2><p>${escapeHtml(plan.hypothesis)}</p>
       ${gridTable(["Factor", "Baseline", "AI proposal"], Object.entries(plan.weights).map(([key, weight]) =>
         [escapeHtml(labels[key] || key), count(plan.baseline_weights[key]), count(weight)]), "")}
-      <h2>Data availability</h2>
+      <h2>Data availability</h2><p>Evidence at NSE close ${escapeHtml(plan.evidence_as_of)}</p>
       <ul>${Object.entries(plan.catalogue_status).map(([key, value]) => `<li>${escapeHtml(key)} · ${count(value)}</li>`).join("")}</ul>
       <h2>Reviewer risk checks</h2><ul>${plan.risks.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       <h2>Before interpreting returns</h2><ul>${plan.blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
@@ -399,7 +399,7 @@ function fullCatalogueView() {
     ${!config.model ? '<p class="desk-copy note">Select an Ollama model in Strategy settings to run a complete screen.</p>' : ""}
     ${result ? `<p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
       ${result.errors.map(error => `<p class="desk-copy error" role="alert">${escapeHtml(error)}</p>`).join("")}
-      ${!result.providerConfigured ? '<p class="desk-copy note">No full-catalogue provider file is configured.</p>' : ""}
+      ${!result.providerConfigured ? '<p class="desk-copy note">No additional evidence source is configured.</p>' : ""}
       ${result.status === "research_only" ? `<p class="desk-copy">${result.parametersUsed} parameters reviewed by role · ${result.eligibleStocks} stocks passed filters and vetoes.</p>
         ${gridTable(["Stock", "Close", "Research score", "Observed flags"], stocks.map(item =>
           [`<strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company)}</small>`, cash(item.close), count(item.score), escapeHtml(item.flags.join(", ") || "—")]), "No stocks passed the full risk screen.")}
@@ -408,9 +408,12 @@ function fullCatalogueView() {
             ...Object.entries(result.weights).map(([key, weight]) => [escapeHtml(key), weight.toFixed(2) + "% weight"]),
             ...Object.entries(result.marketDial).map(([key, value]) => [escapeHtml(key), count(value) + " / 100 — research context"]),
           ], "")}</details>` : ""}
-      ${gridTable(["Parameter", "Role", "Coverage", "Stale", "Invalid", "Required value"], result.parameters.map(item => [
+      ${result.sourceFeeds?.length ? gridTable(["Provider", "Retrieval", "Observations"], result.sourceFeeds.map(feed =>
+        [escapeHtml(feed.name), escapeHtml(feed.status), count(feed.observations)]), "") : ""}
+      ${gridTable(["Parameter", "Role", "Coverage", "Stale", "Invalid", "Conflicts", "Latest dated evidence", "Required value", "Sources"], result.parameters.map(item => [
         escapeHtml(item.label), escapeHtml(item.role), `${item.available}/${item.expected} · ${item.ready ? "Ready" : "Missing or invalid"}`,
-        count(item.stale), count(item.invalid), escapeHtml(item.contract),
+        count(item.stale), count(item.invalid), count(item.conflicts), count(item.latestObservation), escapeHtml(item.contract),
+        escapeHtml(item.sources.join(", ") || "—"),
       ]), "")}` : ""}
   </section>`;
 }

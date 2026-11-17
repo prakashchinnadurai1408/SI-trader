@@ -50,3 +50,19 @@ Open **Three-agent review**, choose an Ollama model and research objective in St
 - Umpire can weight only surviving research ideas and can recommend an exit review only for supplied holdings. Known failed checks cannot be overridden. Missing data alone does not generate an exit signal.
 
 The three stages use separate calls to the configured model. Shared model errors are still possible. Unknown or stale inputs remain visible. Weights are research priorities and have no broker order path. Exit review is a prompt to examine the evidence, not an instruction to sell. Accuracy remains subject to an out-of-sample comparison and Gate G1.
+
+
+## Pull multiple provider feeds
+
+Set `SI_TRADER_SOURCE_MANIFEST` to a JSON file accessible to the dashboard server and restart the app. Configure up to eight named HTTPS endpoints that you control or have permission to access. Each must return the normalized observation array described above. Stock rows must include the current constituent ISIN in an `isin` field. For authenticated endpoints, provide a bearer token via the named environment variable used to start the server.
+
+```json
+{
+  "Financial statements": {"url": "https://data.example.com/normalized/financials"},
+  "Ownership data": {"url": "https://data.example.com/normalized/ownership", "bearerEnv": "SI_OWNERSHIP_TOKEN"}
+}
+```
+
+These example endpoints are placeholders. Feed adapters or a provider-side export must normalize raw filings, APIs and vendor files into this schema. A public website URL is not a normalized endpoint.
+
+**Full 48 research → Check full catalogue** retrieves configured sources and displays each provider's status, counts, and source links. Existing NSE observations and the legacy full-catalogue file still work. When a parameter needs fallback data, the newest valid observation is used. Equally recent values that disagree, or conflicting fresh risk observations, remain unknown. Stale or future-dated inputs cannot fill required coverage. The model receives the validated evidence in the Full 48 screen and Three-agent review. The monthly builder receives observed coverage and numeric summaries as hypothesis context. Monthly backtests still use their own point-in-time historical bundle.

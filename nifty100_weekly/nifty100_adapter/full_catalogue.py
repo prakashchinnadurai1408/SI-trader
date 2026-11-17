@@ -1,5 +1,6 @@
 """Strict research evaluation of the full Nifty 100 parameter catalogue."""
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
 import os
@@ -11,6 +12,7 @@ from .ai_parameters import PARAMETERS
 from .config.parameter_catalogue import RoleType
 from .data.catalogue_evidence import local_evidence, observation, ownership_data, pe_data
 from .data.nse_market import MARKET_TIME, load_nifty100
+from .data.provider_sources import consolidate, load_sources
 from .strategy_builder import agent
 
 MARKET_FACTORS = {
@@ -114,33 +116,55 @@ def readiness(frame, market, provider_path=None, now=None):
             imported = local_evidence(members, day, cutoff, Path(path), MARKET_FACTORS)
         except (OSError, ValueError, TypeError) as error:
             errors.append(f"Provider input rejected: {error}")
+    manifest = os.environ.get("SI_TRADER_SOURCE_MANIFEST")
+    feeds = []
+    if manifest:
+        try:
+            remote, feeds = load_sources(manifest, members, day, cutoff, MARKET_FACTORS)
+            for key, entries in remote.items():
+                imported.setdefault(key, []).extend(entries)
+        except (OSError, ValueError, TypeError) as error:
+            errors.append(f"Source manifest rejected: {error}")
     parameters = []
     for key, parameter in PARAMETERS.items():
         expected = {"*"} if key in MARKET_FACTORS else set(members)
         fresh = records[key]
         stale = 0
         invalid = 0
+        candidates = defaultdict(list)
+        conflicts = 0
         for item in imported.get(key, []):
             if key in NATIVE or item["symbol"] not in expected or not valid_value(key, parameter.role_type, item["value"]):
                 invalid += 1
             elif item["stale"]:
                 stale += 1
             elif item["symbol"] not in fresh:
-                fresh[item["symbol"]] = {**item, "providerDeclared": True}
+                candidates[item["symbol"]].append(item)
+        for symbol, entries in candidates.items():
+            record = consolidate(entries, risk=parameter.role_type in (RoleType.VETO, RoleType.FILTER))
+            if record is None:
+                conflicts += 1
+            else:
+                fresh[symbol] = {**record, "providerDeclared": True}
+        latest = max((datetime.fromisoformat(item["asOf"]).replace(tzinfo=MARKET_TIME)
+                      if len(item["asOf"]) == 10 else datetime.fromisoformat(item["asOf"])
+                      for item in fresh.values()), default=None)
+        source_links = {entry["source"] for item in fresh.values() for entry in item.get("evidence", [item])}
         count = len(expected.intersection(fresh))
         required = 1 if key in MARKET_FACTORS else 100
         parameters.append({
             "key": key, "label": parameter.display_name, "role": parameter.role_type.value,
             "expected": required, "available": count, "scope": "Market" if key in MARKET_FACTORS else "Stock",
             "stale": stale, "invalid": invalid, "contract": contract(key, parameter),
-            "sources": sorted({item["source"] for item in fresh.values()})[:3],
-            "ready": count == required and not invalid,
+            "sources": sorted(source_links)[:3], "conflicts": conflicts,
+            "latestObservation": latest.astimezone(MARKET_TIME).date().isoformat() if latest else None,
+            "ready": count == required and not invalid and not conflicts,
         })
     complete = sum(item["ready"] for item in parameters)
     return {
         "ready": complete == len(PARAMETERS) and not errors,
         "complete": complete, "total": len(PARAMETERS), "market": market,
-        "parameters": parameters, "providerConfigured": bool(path), "errors": errors,
+        "parameters": parameters, "providerConfigured": bool(path or manifest), "errors": errors, "sourceFeeds": feeds,
     }, records
 
 
