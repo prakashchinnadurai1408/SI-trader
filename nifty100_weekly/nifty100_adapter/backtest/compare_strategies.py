@@ -65,6 +65,10 @@ def downside_metrics(equity):
 def compare_runs(baseline_dir, challenger_dir):
     baseline, left = load_report(baseline_dir, "monthly_baseline")
     challenger, right = load_report(challenger_dir, "monthly_challenger")
+    return compare_results(baseline, left, challenger, right)
+
+
+def compare_results(baseline, left, challenger, right):
     matched_fields = ("input_sha256", "start_month", "end_month", "starting_capital", "transaction_cost_model")
     if (
         any(baseline[key] != challenger[key] for key in matched_fields)

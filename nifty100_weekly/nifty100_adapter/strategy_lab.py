@@ -2,12 +2,17 @@
 
 from datetime import datetime
 import os
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from .backtest.monthly_inputs import load_inputs
+from .backtest.compare_strategies import compare_results
+from .backtest.historical_intake import check
+from .backtest.monthly_backtester import run
+from .strategy_builder import challenger_weights
 from .data.nse_market import MARKET_TIME, load_nifty100
 
 PRESETS = [
@@ -79,6 +84,46 @@ def diagnostics(prices, tri, horizon, as_of):
         "stress": {"assumption": "Zero log drift, fat-tailed shocks, 3,000 paths", "percentiles": [5, 25, 50, 75, 95],
                    "days": list(range(horizon + 1)), "returnsPct": [[0.0] * 5, *fan.round(2).tolist()]},
     }
+
+
+def run_comparison(payload):
+    start, end = payload.get("start"), payload.get("end")
+    capital = payload.get("capital")
+    if any(not isinstance(month, str) or not re.fullmatch(r"[1-9][0-9]{3}-(0[1-9]|1[0-2])", month)
+           for month in (start, end)):
+        raise ValueError("Choose a first and last holdout month.")
+    if start > end or end >= datetime.now(MARKET_TIME).strftime("%Y-%m"):
+        raise ValueError("Choose an ordered holdout ending in a completed month.")
+    if type(capital) not in (int, float) or not 1 <= capital <= 1_000_000_000:
+        raise ValueError("Enter starting capital between INR 1 and INR 1 billion.")
+    run_test = payload.get("run")
+    if type(run_test) is not bool:
+        raise ValueError("Choose a readiness check or strategy comparison.")
+    proposal = payload.get("challenger")
+    weights = challenger_weights(proposal) if proposal is not None else None
+    configured = os.environ.get("SI_TRADER_STRATEGY_BUNDLE")
+    if not configured:
+        return {"readiness": {"ready": False, "issues": [
+            "Set SI_TRADER_STRATEGY_BUNDLE to a prepared research bundle in the server environment."
+        ]}}
+    folder = Path(configured)
+    readiness = check(folder, start, end)
+    result = {"readiness": readiness}
+    if not readiness["ready"] or not run_test:
+        return result
+
+    equity, baseline = run(folder, start, end, capital)
+    defensive_equity, defensive = run(folder, start, end, capital, defensive=True)
+    result.update({
+        "baselineGate": baseline["gate_g1"],
+        "capital": capital,
+        "inputSha256": baseline["input_sha256"],
+        "comparisons": [compare_results(baseline, equity, defensive, defensive_equity)],
+    })
+    if weights is not None:
+        challenger_equity, challenger = run(folder, start, end, capital, weights=weights)
+        result["comparisons"].append(compare_results(baseline, equity, challenger, challenger_equity))
+    return result
 
 
 def run_diagnostics(symbol, horizon, folder=None):

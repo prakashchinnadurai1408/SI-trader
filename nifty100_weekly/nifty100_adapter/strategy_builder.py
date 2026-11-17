@@ -158,7 +158,10 @@ def build_research_strategy(model, objective):
 
 
 def read_challenger(path):
-    candidate = json.loads(path.read_text(encoding="utf-8-sig"))
+    return challenger_weights(json.loads(path.read_text(encoding="utf-8-sig")))
+
+
+def challenger_weights(candidate):
     if (
         not isinstance(candidate, dict)
         or candidate.get("kind") != "monthly_challenger"

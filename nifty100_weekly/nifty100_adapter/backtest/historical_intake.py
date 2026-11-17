@@ -179,6 +179,10 @@ def check(folder, start, end):
             result["issues"].append("A synthetic bundle cannot qualify for Gate G1.")
         if len(months) < 60:
             result["issues"].append("Gate G1 requires at least 60 complete out-of-sample months.")
+        session_counts = pd.Series(dates.to_period("M")).value_counts().reindex(months, fill_value=0)
+        short = session_counts[session_counts.lt(10)]
+        if not short.empty:
+            result["issues"].append(f"{len(short)} holdout months have fewer than 10 benchmark sessions; first: {short.index[0]}.")
         missing = dates.difference(prices.index.get_level_values("date").unique())
         if len(missing):
             result["issues"].append(f"Missing NSE prices for {len(missing)} benchmark sessions; first: {missing[0].date()}.")

@@ -14,6 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
+  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null,
   models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "overview", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
@@ -466,6 +467,52 @@ function committeeView() {
   </section>`;
 }
 
+function monthlyComparison() {
+  const inputs = state.monthlyInputs;
+  const result = state.monthlyResult;
+  const comparisons = result?.comparisons;
+  const first = comparisons?.[0];
+  const recovery = downside => downside.worst_drawdown_to_recovery_sessions ?? "Unrecovered";
+  const rows = first ? [
+    ["Monthly baseline", percent(first.baseline_total_roi_pct), percent(first.baseline_net_cagr_pct),
+      percent(first.baseline_max_drawdown_pct), percent(first.baseline_downside.downside_capture_pct),
+      count(recovery(first.baseline_downside))],
+    ...comparisons.map(item => [
+      item.variant === "monthly_defensive" ? "Defensive trend" : "AI factor challenger",
+      percent(item.challenger_total_roi_pct), percent(item.challenger_net_cagr_pct),
+      percent(item.challenger_max_drawdown_pct), percent(item.variant_downside.downside_capture_pct),
+      count(recovery(item.variant_downside)),
+    ]),
+  ] : [];
+  return `<section class="card desk-card">
+    <div class="desk-card-header"><h2>Monthly strategy comparison</h2><span class="desk-tag">Historical research</span></div>
+    <p class="desk-copy">Choose an unseen evaluation period and use the same prices, membership, benchmark and costs for every strategy.</p>
+    <form id="monthly-comparison" class="desk-copy">
+      <label for="monthly-start">First holdout month</label>
+      <input id="monthly-start" name="start" type="month" required value="${escapeHtml(inputs.start)}">
+      <label for="monthly-end">Last holdout month</label>
+      <input id="monthly-end" name="end" type="month" required value="${escapeHtml(inputs.end)}">
+      <label for="monthly-capital">Starting capital (INR)</label>
+      <input id="monthly-capital" name="capital" type="number" min="1" max="1000000000" required value="${escapeHtml(inputs.capital)}">
+      <label><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
+        ${state.researchProposal ? "" : "disabled"}> Include the current AI factor challenger</label>
+      ${state.researchProposal ? "" : '<p class="note">Generate a challenger in the AI strategy builder to include it here.</p>'}
+      <div class="actions">
+        <button class="secondary" value="check" ${state.busy ? "disabled" : ""}>Check data readiness</button>
+        <button value="run" ${state.busy ? "disabled" : ""}>Run monthly comparison</button>
+      </div>
+    </form>
+    ${result ? `<div class="desk-copy">
+      <p role="status"><strong>${result.readiness.ready ? "Research bundle passed the data checks." : "Research bundle needs attention."}</strong></p>
+      ${result.readiness.complete_months === undefined ? "" :
+        `<p>${count(result.readiness.complete_months)} holdout months · ${count(result.readiness.sessions)} trading sessions</p>`}
+      ${result.readiness.issues.length ? "<ul>" + result.readiness.issues.map(issue => "<li>" + escapeHtml(issue) + "</li>").join("") + "</ul>" : ""}
+      ${first ? `<p>Baseline Gate G1 <strong>${escapeHtml(result.baselineGate.status)}</strong> · Nifty 100 TRI total return <strong>${percent(first.benchmark_total_roi_pct)}</strong> · Starting capital <strong>${cash(result.capital)}</strong></p>` : ""}
+    </div>` : ""}
+    ${first ? gridTable(["Strategy", "Net total return", "Net CAGR", "Max drawdown", "Downside capture", "Recovery sessions"], rows, "") : ""}
+  </section>`;
+}
+
 function strategyLab() {
   const lab = state.lab;
   const result = state.labResult;
@@ -480,6 +527,7 @@ function strategyLab() {
       <button data-action="load-lab" ${state.busy ? "disabled" : ""}>${state.busy ? "Working…" : "Refresh NSE snapshot"}</button>
       ${feedback()}
     </section>
+    ${monthlyComparison()}
     ${lab ? `<div class="desk-metrics">
       ${metric("Stocks up", count(lab.breadth.up), "Of " + count(lab.breadth.dailyCovered) + " with daily data")}
       ${metric("Stocks down", count(lab.breadth.down), "Flat: " + count(lab.breadth.flat))}
@@ -601,6 +649,23 @@ app.addEventListener("submit", async event => {
     }
     state.view = "broker";
     show();
+  } else if (event.target.id === "monthly-comparison" && !state.busy) {
+    const run = event.submitter?.value === "run";
+    state.monthlyInputs = {start: form.get("start"), end: form.get("end"), capital: Number(form.get("capital")),
+      includeAI: form.has("includeAI")};
+    state.monthlyResult = null;
+    state.busy = true;
+    show(run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.");
+    try {
+      state.monthlyResult = await request("/api/monthly-comparison", {...state.monthlyInputs, run,
+        challenger: state.monthlyInputs.includeAI ? state.researchProposal : null});
+      show();
+    } catch (error) {
+      show(error.message, true);
+    } finally {
+      state.busy = false;
+      render();
+    }
   } else if (event.target.id === "quant-diagnostics" && !state.busy) {
     state.labSymbol = form.get("symbol");
     state.labHorizon = Number(form.get("horizon"));
