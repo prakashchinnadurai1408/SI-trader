@@ -5,7 +5,7 @@ const demoPassword = "WeeklyDemo123!";
 const demoCode = "123456";
 const limits = { stock: 20, stop: 4, weekly: 3, cash: 10 };
 const defaultExecution = { funding: "paper", paperCapital: 25000, cashBuffer: 10, scenarioMove: 5, paperAuto: true };
-const defaultConfig = { model: "", objective: "Build a selective weekly delivery basket prioritizing net edge and liquidity.", maxPositions: 5, parameters: [], execution: defaultExecution };
+const defaultConfig = { model: "", objective: "Build a selective weekly delivery basket prioritizing net edge and liquidity.", maxPositions: 5, execution: defaultExecution };
 let config = defaultConfig;
 try {
   config = { ...defaultConfig, ...JSON.parse(localStorage.getItem("si-trader-strategy-config")) };
@@ -16,7 +16,7 @@ try {
 const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
-  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, draft: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
+  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -106,28 +106,8 @@ function broker() {
   </main>`;
 }
 
-function parameterCatalogue(parameters) {
-  if (!parameters?.length) return "";
-  const enabled = parameters.filter(item => item.enabled);
-  const rows = parameters.map(item => `<tr>
-    <th scope="row">${escapeHtml(item.label)}</th>
-    <td>${item.enabled ? "On" : "Off"}${item.protected ? " · Protected" : ""}</td>
-    <td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.weight)}</td>
-    <td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.refresh)}</td><td>${escapeHtml(item.availability)}</td>
-  </tr>`).join("");
-  return `<section>
-    <h2>Parameter catalogue</h2>
-    <p>${enabled.length} of ${parameters.length} enabled · ${enabled.reduce((sum, item) => sum + item.weight, 0)} weight points.
-      Refresh schedules describe intended data updates.</p>
-    <div class="catalogue-table" tabindex="0" aria-label="AI parameter catalogue">
-      <table><thead><tr><th>Parameter</th><th>Enabled</th><th>Role</th><th>Weight</th><th>Source</th><th>Refresh</th><th>Data status</th></tr></thead>
-      <tbody>${rows}</tbody></table>
-    </div>
-  </section>`;
-}
-
 function strategyConfig() {
-  const draft = state.draft || config;
+  const draft = config;
   const execution = draft.execution || defaultExecution;
   const options = state.models.map(model =>
     `<option value="${escapeHtml(model)}" ${draft.model === model ? "selected" : ""}>${escapeHtml(model)}</option>`
@@ -165,11 +145,10 @@ function strategyConfig() {
         <p class="note">InvestRight cash sizes the simulation. Live order submission is disabled.</p>
       </section>
       <div class="actions">
-        <button name="intent" value="generate" ${state.busy || !state.models.length ? "disabled" : ""}>Generate parameters with AI</button>
-        <button class="secondary" name="intent" value="save" ${state.busy || !state.models.length ? "disabled" : ""}>Save configuration</button>
+        <button ${state.busy || !state.models.length ? "disabled" : ""}>Save configuration</button>
+        <p class="note">Weekly evaluates all 48 catalogue parameters by role. See Weekly for the evidence and ranking weights.</p>
       </div>
       ${feedback()}
-      ${parameterCatalogue(draft.parameters)}
     </form>
   </main>`;
 }
@@ -328,6 +307,7 @@ function weekly() {
       <form id="strategy"><button ${state.busy || state.halted || !config.model ? "disabled" : ""}>${state.busy ? "Running strategy…" : "Run weekly strategy"}</button></form>
       ${!config.model ? '<div class="actions"><button class="secondary" data-action="config">Set up Ollama model</button></div>' : ""}
       ${state.halted ? '<p role="status">Weekly paper runs are paused. Select Reset kill switch to continue.</p>' : ""}
+      ${plan ? `<p class="note">Maximum paper exposure after market dials · ${count(plan.maximumPaperExposurePct)}%</p>` : ""}
       ${feedback()}
     </section>
     <div class="desk-analysis">
@@ -841,33 +821,13 @@ app.addEventListener("submit", async event => {
       show("Select an installed model and enter a strategy objective.", true);
       return;
     }
-    const prior = state.draft || config;
     const execution = {
       funding: form.get("funding"), paperCapital: Number(form.get("paperCapital")),
       cashBuffer: Number(form.get("cashBuffer")), scenarioMove: Number(form.get("scenarioMove")),
       paperAuto: form.get("paperAuto") === "on",
     };
-    const settings = { model, objective, maxPositions: Number(form.get("maxPositions")), execution };
-    if (event.submitter?.value === "generate") {
-      state.draft = { ...settings, parameters: [] };
-      state.busy = true;
-      show("Generating the parameter catalogue. This can take a few minutes.");
-      try {
-        const result = await request("/api/parameters", settings);
-        state.draft.parameters = result.parameters;
-        show("AI catalogue generated. Review it, then save the configuration.");
-      } catch (error) {
-        show(error.message, true);
-      } finally {
-        state.busy = false;
-        render();
-      }
-      return;
-    }
-    const matching = prior.model === model && prior.objective === objective;
-    config = { ...settings, parameters: matching ? prior.parameters : [] };
+    config = {model, objective, maxPositions: Number(form.get("maxPositions")), execution};
     localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
-    state.draft = null;
     state.view = "dashboard";
     show("AI strategy configuration saved.");
   } else if (event.target.id === "strategy" && !state.busy && !state.halted && config.model) {
@@ -879,8 +839,6 @@ app.addEventListener("submit", async event => {
       state.plan = result;
       state.preferParameterPreview = false;
       state.parameterReportMessage = "";
-      config.parameters = result.parameters;
-      localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
       state.message = result.message || (result.execution.fills.length
         ? `${result.execution.fills.length} simulated fills. View the fill details in Execution.`
         : `${result.basket.length} candidates sized. No paper fills recorded.`);
@@ -966,7 +924,6 @@ app.addEventListener("click", async event => {
       break;
     }
     case "config":
-      state.draft = null;
       state.view = "config";
       await loadModels();
       break;

@@ -6,17 +6,17 @@ import json
 import re
 from pathlib import Path
 
-from .ai_parameters import availability, catalogue_view, propose_profile, score_parameters, validate_profile
+from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
 from .ai_strategy import generate_plan, installed_models
-from .backtest.weekly_backtester import WeeklyBacktester
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
-from .full_catalogue import full_catalogue, readiness, run_report, weekly_risk_screen
+from .full_catalogue import full_catalogue, readiness, run_report
 from .investright import broker_get, holdings_count
 from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
 from .strategy_lab import pulse, run_comparison, run_diagnostics
 from .strategy_builder import build_research_strategy
+from .weekly_research import weekly_candidates, weekly_context
 from .trading_workspace import ENDPOINTS, affordable_candidates, broker_snapshot, cash_amount, number, paper_sizing
 
 ASSETS = Path(__file__).with_name("web")
@@ -134,63 +134,47 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 budget = cash_amount(broker_get(ENDPOINTS["funds"])) if funding == "broker" else number(trading.get("paperCapital"))
                 if budget is None or not 0 <= budget <= 10_000_000_000:
                     raise ValueError("Choose a valid capital amount.")
-                parameters = payload.get("parameters") or catalogue_view(propose_profile(model, objective.strip()))
-                profile = validate_profile(parameters)
-                configured_scores = score_parameters(profile)
                 frame, market = load_nifty100()
                 coverage, records = readiness(frame, market)
-                paper_universe, rejected = weekly_risk_screen(frame, records)
-                complete_checks = {row["key"] for row in coverage["parameters"] if row["ready"]}
-                risk_labels = {
-                    "asm_gsm_surveillance": "ASM/GSM surveillance", "promoter_pledging_pct": "promoter pledging",
-                    "legal_cases_directors": "legal cases", "regulatory_actions": "regulatory actions",
-                }
-                market["unverifiedChecks"] = [label for key, label in risk_labels.items() if key not in complete_checks]
-                available = frame.set_index("symbol")
-                strategy = WeeklyBacktester(paper_universe, top_n=20)
-                strategy.score_calc.score_params = configured_scores
-                result = strategy.run_weekly_pipeline()
-                candidates = result["selection"]
-                for candidate in candidates:
-                    # The backtester defaults absent pledging to zero for legacy reports.
-                    # Keep an unknown value out of the model prompt.
-                    candidate.pop("promoter_pledging_pct", None)
-                    for parameter in configured_scores:
-                        value = available.at[candidate["symbol"], parameter.parameter_key]
-                        if value is not None and value == value:
-                            candidate[parameter.parameter_key] = round(float(value), 2)
-                market["activeScores"] = [
-                    {"name": parameter.display_name, "weight": parameter.weight}
-                    for parameter in configured_scores
+                context, market_dials = weekly_context(coverage, records)
+                candidates, weights, rejected = weekly_candidates(frame, coverage, records)
+                # The least favorable observed dial can only reduce the user-set paper exposure.
+                exposure = (100 - cash_buffer) * min(market_dials.values(), default=100) / 100
+                effective_buffer = 100 - exposure
+                affordable = affordable_candidates(candidates, budget, effective_buffer)[:12]
+                active_scores = [
+                    {"name": PARAMETERS[key].display_name, "weight": round(weight, 2)}
+                    for key, weight in weights.items()
                 ]
-                market["pendingParameters"] = sum(
-                    item["enabled"] and availability(key) == "Feed pending"
-                    for key, item in profile.items()
-                )
-                affordable = affordable_candidates(candidates, budget, cash_buffer)
-                if candidates and not affordable:
-                    result["message"] = "Available cash does not cover a share within the per-stock cap."
                 plan = generate_plan(
-                    model, objective.strip(), affordable, max_positions, market["activeScores"],
-                    {"available_cash_inr": budget, "cash_buffer_pct": cash_buffer, "paper": True},
-                ) if affordable else {
-                    "basket": [], "title": "", "thesis": "",
-                }
-                execution = paper_sizing(plan["basket"], budget, cash_buffer, scenario_move, execute)
+                    model, objective.strip(), affordable, max_positions, active_scores,
+                    {"available_cash_inr": budget, "cash_buffer_pct": round(effective_buffer, 2), "paper": True},
+                    research_context=context,
+                ) if affordable else {"basket": [], "title": "", "thesis": ""}
+                execution = paper_sizing(plan["basket"], budget, effective_buffer, scenario_move, execute)
+                if candidates and not affordable:
+                    message = "No shortlisted stock can be sized within the current paper cash or exposure limit."
+                elif not candidates:
+                    message = "No research candidates passed the observed checks with sufficient comparable score data."
+                else:
+                    message = ""
+                market["unverifiedChecks"] = [row["label"] for row in coverage["parameters"]
+                                               if row["key"] in rejected and not row["ready"]]
                 self.send_json(200, {
                     **plan,
                     "basket": execution["basket"],
                     "execution": {key: value for key, value in execution.items() if key != "basket"},
                     "funding": funding,
-                    "parameters": parameters,
                     "model": model,
                     "market": market,
                     "considered": len(frame),
                     "parameterRunReport": run_report(
-                        coverage, records, "weekly", configured_scores, rejected,
+                        coverage, records, "weekly", weights, rejected,
                         tuple(item["symbol"] for item in execution["basket"]),
+                        market_dials=market_dials, planner_used=bool(affordable),
                     ),
-                    "message": result.get("message", ""),
+                    "maximumPaperExposurePct": round(exposure, 2),
+                    "message": message,
                 })
             else:
                 self.send_error(404)

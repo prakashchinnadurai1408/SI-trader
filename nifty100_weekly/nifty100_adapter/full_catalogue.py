@@ -185,8 +185,10 @@ def passes(key, role, value):
     return value if role == RoleType.FILTER else not value
 
 
-def run_report(coverage, records, mode, scores=(), weekly_rejections=None, symbols=()):
-    score_weights = {item.parameter_key: item.weight for item in scores}
+def run_report(coverage, records, mode, scores=None, weekly_rejections=None, symbols=(), *,
+               market_dials=None, planner_used=False):
+    score_weights = scores or {}
+    exposure_inputs = market_dials or {}
     rows = []
     for item in coverage["parameters"]:
         key = item["key"]
@@ -195,12 +197,20 @@ def run_report(coverage, records, mode, scores=(), weekly_rejections=None, symbo
             use = "Ranking input"
         elif weekly_rejections is not None and item["role"] in ("Filter", "Veto") and key not in RATES and item["available"]:
             use = "Paper eligibility check"
+        elif key in exposure_inputs:
+            use = f"Paper exposure dial · {exposure_inputs[key]}/100"
+        elif mode == "weekly" and item["available"] and key in RATES:
+            use = "Observed rate · paper cost model priced separately"
+        elif mode == "weekly" and item["available"] and item["role"] == "Score":
+            use = "Ranking skipped" if item["ready"] else "Incomplete or disputed coverage · ranking skipped"
+        elif mode == "weekly" and item["available"] and item["role"] in ("Advisory", "Flag") and planner_used:
+            use = "Planner coverage and shortlist context"
         elif mode == "monthly" and item["available"]:
             use = "Proposal context"
         else:
-            use = "Coverage only"
+            use = "Coverage only" if item["available"] else "Evidence unavailable"
         rows.append({
-            **item, "use": use, "weight": score_weights.get(key), "excludedStocks": rejected,
+            **item, "use": use, "weight": round(score_weights[key], 2) if key in score_weights else None, "excludedStocks": rejected,
             "unknown": item["expected"] - item["available"],
         })
     for row in rows:
