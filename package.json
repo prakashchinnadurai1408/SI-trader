@@ -1,0 +1,7 @@
+{
+  "name": "si-trader",
+  "private": true,
+  "scripts": {
+    "start": "python -B -X utf8 -m nifty100_weekly.nifty100_adapter.web_app"
+  }
+}

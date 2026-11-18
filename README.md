@@ -4,12 +4,14 @@ A local research and paper-trading workspace for Nifty 100. It includes an NSE w
 
 ## Run locally
 
-Use Python 3.12 or newer and run from the checkout root.
+Use Python 3.12 or newer and run from the checkout root. The npm command also requires Node.js.
 
 ```powershell
 python -m pip install -r requirements.txt
-python -X utf8 -m nifty100_weekly.nifty100_adapter.web_app
+npm run start
 ```
+
+To launch directly with Python, run `python -X utf8 -m nifty100_weekly.nifty100_adapter.web_app`.
 
 Open http://127.0.0.1:8765. The local sign-in screen shows the demo credentials. Choose an installed Ollama model in **Strategy settings** to generate AI research. **Data feeds** and its **Refresh data feeds** action work without a model.
 
