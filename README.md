@@ -19,3 +19,4 @@ The service binds to loopback. The browser sign-in is a demo. Do not expose this
 - [Monthly backtesting and strategy comparison](nifty100_weekly/MONTHLY_BACKTEST.md)
 - [Gate G1](nifty100_weekly/GATE_G1.md)
 - [Six-rebalance paper pilot and screenshot review](nifty100_weekly/PAPER_PILOT.md)
+- [Agent tools and filing review workflow](nifty100_weekly/AGENT_TOOLS.md)
