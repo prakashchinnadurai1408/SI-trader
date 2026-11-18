@@ -71,7 +71,7 @@ After a qualifying Gate G1 pass, follow the [six-rebalance paper pilot guide](PA
 
 ## AI strategy challenger
 
-Open **Monthly** in the local dashboard. Configure an Ollama model in **Settings**, enter a research objective, generate a proposal, and export monthly-challenger.json. The proposer and reviewer run in separate model calls. This workflow changes factor weights for the challenger only. The baseline and Gate G1 pilot criteria stay frozen.
+Open **Monthly** in the local dashboard. Configure an Ollama model in **LLM Configuration**, enter a research objective, generate a proposal, and export monthly-challenger.json. The proposer and reviewer run in separate model calls. This workflow changes factor weights for the challenger only. The baseline and Gate G1 pilot criteria stay frozen.
 
 Declare the holdout dates and strategy comparison before viewing results. Use the exact same verified data bundle, dates, starting capital, and cost assumptions in both runs. The dates below are examples.
 

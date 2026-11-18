@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
-from .ai_strategy import generate_plan, installed_models
+from .ai_strategy import generate_plan, installed_models, test_model
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
 from .full_catalogue import full_catalogue, readiness, run_report
@@ -77,7 +77,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, pulse())
             elif self.path == "/api/models":
                 self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay"):
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay", "/api/model-test"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
@@ -97,6 +97,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json(200, run_diagnostics(symbol, payload.get("horizon")))
                     return
                 model = payload.get("model")
+                if self.path == "/api/model-test":
+                    if not isinstance(model, str) or model not in installed_models():
+                        raise ValueError("Choose an installed Ollama model.")
+                    self.send_json(200, test_model(model))
+                    return
                 objective = payload.get("objective")
                 max_positions = payload.get("maxPositions")
                 if not isinstance(objective, str) or not 1 <= len(objective.strip()) <= 500:

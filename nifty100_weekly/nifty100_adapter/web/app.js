@@ -17,7 +17,7 @@ const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, testPriceInputs: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
-  models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
+  models: [], modelDraft: "", modelTest: null, lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
   broker: "Access to be confirmed", message: "", error: false,
@@ -110,20 +110,10 @@ function broker() {
 function strategyConfig() {
   const draft = config;
   const execution = draft.execution || defaultExecution;
-  const options = state.models.map(model =>
-    `<option value="${escapeHtml(model)}" ${draft.model === model ? "selected" : ""}>${escapeHtml(model)}</option>`
-  ).join("");
   return `<main class="page config-page">
     <div class="topline"><button class="secondary" data-action="dashboard" ${state.busy ? "disabled" : ""}>Back to dashboard</button>${paper}</div>
     <h1>Strategy configuration</h1>
     <form class="card stack" id="config">
-      <section>
-        <h2>LLM configuration</h2>
-        <p>Provider: Ollama (local)</p>
-        <label for="model">Model</label>
-        <select id="model" name="model" required><option value="">Select an installed model</option>${options}</select>
-        <div class="actions"><button type="button" class="secondary" data-action="models" ${state.busy ? "disabled" : ""}>Check Ollama connection</button></div>
-      </section>
       <section>
         <h2>AI strategy</h2>
         <label for="objective">Strategy objective</label>
@@ -146,9 +136,38 @@ function strategyConfig() {
         <p class="note">InvestRight cash sizes the simulation. Live order submission is disabled.</p>
       </section>
       <div class="actions">
-        <button ${state.busy || !state.models.length ? "disabled" : ""}>Save configuration</button>
+        <button ${state.busy ? "disabled" : ""}>Save configuration</button>
         <p class="note">Weekly evaluates all 48 catalogue parameters by role. See Weekly for the evidence and ranking weights.</p>
       </div>
+      ${feedback()}
+    </form>
+  </main>`;
+}
+
+function llmConfig() {
+  const tested = state.modelTest;
+  const available = state.models.includes(state.modelDraft);
+  return `<main class="page config-page">
+    <div class="topline"><button class="secondary" data-action="dashboard" ${state.busy ? "disabled" : ""}>Back to dashboard</button>${paper}</div>
+    <h1>LLM Configuration</h1>
+    <form class="card stack" id="llm-config">
+      <section>
+        <h2>Local Ollama</h2>
+        <p>Connection endpoint <code>127.0.0.1:11434</code></p>
+        <p class="note">This model is shared by Weekly, Monthly and the research screens.</p>
+        <label for="llm-model">Installed model</label>
+        <select id="llm-model" name="model" required ${state.busy || !state.models.length ? "disabled" : ""}>
+          <option value="">Select a model</option>
+          ${state.models.map(model => `<option value="${escapeHtml(model)}" ${state.modelDraft === model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
+        </select>
+        <p class="note">Saved model · ${escapeHtml(config.model || "None selected")}</p>
+      </section>
+      <div class="actions">
+        <button type="button" class="secondary" data-action="models" ${state.busy ? "disabled" : ""}>Refresh installed models</button>
+        <button class="secondary" value="test" ${state.busy || !available ? "disabled" : ""}>Test model</button>
+        <button value="save" ${state.busy || !available ? "disabled" : ""}>Save model</button>
+      </div>
+      ${tested?.model === state.modelDraft ? `<p class="note">Last response time · ${count((tested.elapsedMs / 1000).toFixed(1))} seconds</p>` : ""}
       ${feedback()}
     </form>
   </main>`;
@@ -160,6 +179,9 @@ async function loadModels() {
   try {
     const result = await request("/api/models");
     state.models = result.models;
+    if (!state.models.includes(state.modelDraft)) {
+      state.modelDraft = state.models.includes(config.model) ? config.model : "";
+    }
     show(state.models.length ? "Ollama is connected." : "Ollama is connected. Install a model to generate a strategy.", !state.models.length);
   } catch (error) {
     state.models = [];
@@ -304,9 +326,9 @@ function weekly() {
       ${metric("Simulated fills", run ? fills : "—", run ? "Reference close • " + tradeTime(run.asOf) : "Appears after a paper run")}
     </div>
     <section class="card desk-run">
-      <div><h2>Weekly AI strategy</h2><p>${config.model ? escapeHtml(config.model) + " · " + escapeHtml(source) + " · " + (config.execution.paperAuto ? "Automatic paper fills" : "Preview only") : "Choose a model and capital source in Strategy settings."}</p></div>
+      <div><h2>Weekly AI strategy</h2><p>${config.model ? escapeHtml(config.model) + " · " + escapeHtml(source) + " · " + (config.execution.paperAuto ? "Automatic paper fills" : "Preview only") : "Choose a model to run a paper strategy."}</p></div>
       <form id="strategy"><button ${state.busy || state.halted || !config.model ? "disabled" : ""}>${state.busy ? "Running strategy…" : "Run weekly strategy"}</button></form>
-      ${!config.model ? '<div class="actions"><button class="secondary" data-action="config">Set up Ollama model</button></div>' : ""}
+      ${!config.model ? '<div class="actions"><button class="secondary" data-action="llm-config">Set up Ollama model</button></div>' : ""}
       ${state.halted ? '<p role="status">Weekly paper runs are paused. Select Reset kill switch to continue.</p>' : ""}
       ${plan ? `<p class="note">Maximum paper exposure after market dials · ${count(plan.maximumPaperExposurePct)}%</p>` : ""}
       ${feedback()}
@@ -364,7 +386,7 @@ function builder() {
       ${plan ? '<button type="button" class="secondary" data-action="export-research">Export proposal</button>' : ""}</div>
     </form>
     <p class="note">${config.model ? "Model: " + escapeHtml(config.model) : "Select an installed model to generate a proposal."}</p>
-    ${!config.model ? '<button class="secondary" data-action="config">Set up Ollama model</button>' : ""}
+    ${!config.model ? '<button class="secondary" data-action="llm-config">Set up Ollama model</button>' : ""}
     ${feedback()}
     ${plan ? `<div class="builder-result">
       <h2>Test hypothesis</h2><p>${escapeHtml(plan.hypothesis)}</p>
@@ -386,7 +408,7 @@ function watchlistView() {
     <div class="desk-card-header"><h2>Top 10 Nifty 100 watchlist</h2><span class="desk-tag">Research only</span></div>
     <p>All 48 parameters are listed. The LLM weights only the inputs approved for this research ranking. See Data feeds for additional evidence.</p>
     <form id="watchlist"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Refreshing NSE and ranking…" : "Build Top 10 watchlist"}</button></form>
-    ${!config.model ? "<p class='note'>Choose an Ollama model in Strategy settings.</p>" : ""}
+    ${!config.model ? "<p class='note'>Choose an Ollama model in LLM Configuration.</p>" : ""}
     ${feedback()}
     ${watch ? `<div class="builder-result">
       <p>NSE close ${escapeHtml(watch.market.asOf)} · ${watch.market.covered}/${watch.market.universeSize} covered ·
@@ -441,7 +463,7 @@ function fullCatalogueView() {
       <button data-action="full-catalogue" ${state.busy || !result?.ready || !config.model ? "disabled" : ""}>Run full AI screen</button>
     </div>
     <div class="desk-copy">${feedback()}</div>
-    ${!config.model ? '<p class="desk-copy note">Select an Ollama model in Strategy settings to run a complete screen.</p>' : ""}
+    ${!config.model ? '<p class="desk-copy note">Select an Ollama model in LLM Configuration to run a complete screen.</p>' : ""}
     ${result ? `<p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
       ${result.errors.map(error => `<p class="desk-copy error" role="alert">${escapeHtml(error)}</p>`).join("")}
       ${!result.providerConfigured ? '<p class="desk-copy note">No additional evidence source is configured.</p>' : ""}
@@ -494,7 +516,7 @@ function committeeView() {
       <input id="committee-holdings" name="holdings" value="${escapeHtml(state.committeeHoldings)}" placeholder="Comma-separated NSE symbols">
       <div class="actions"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Agents reviewing…" : "Run three-agent review"}</button></div>
     </form>
-    ${!config.model ? '<p class="desk-copy note">Select a model in Strategy settings.</p>' : ""}
+    ${!config.model ? '<p class="desk-copy note">Select a model in LLM Configuration.</p>' : ""}
     <div class="desk-copy">${feedback()}</div>
     ${result ? `<div class="builder-result">
       <p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
@@ -749,6 +771,7 @@ function dashboard() {
         <div class="desk-primary-links">
           ${primary.map(navButton).join("")}
           <button data-action="config" ${state.busy ? "disabled" : ""}>Settings</button>
+          <button data-action="llm-config" ${state.busy ? "disabled" : ""}>LLM Configuration</button>
         </div>
         <details class="desk-more-links" ${state.moreLinksOpen ? "open" : ""}>
           <summary>Research &amp; execution</summary>
@@ -785,7 +808,7 @@ setInterval(() => {
 }, 30000);
 
 function render() {
-  app.innerHTML = state.view === "config" ? strategyConfig() : state.view === "dashboard" ? dashboard() : state.view === "broker" ? broker() : signIn();
+  app.innerHTML = state.view === "config" ? strategyConfig() : state.view === "llm" ? llmConfig() : state.view === "dashboard" ? dashboard() : state.view === "broker" ? broker() : signIn();
 }
 
 function show(message = "", error = false) {
@@ -816,6 +839,11 @@ app.addEventListener("input", event => {
 });
 
 app.addEventListener("change", event => {
+  if (event.target.id === "llm-model") {
+    state.modelDraft = event.target.value;
+    show();
+    document.querySelector("#llm-model").focus({preventScroll: true});
+  }
   if (event.target.id === "parameter-symbol") {
     state.parameterSymbol = event.target.value;
     render();
@@ -953,11 +981,31 @@ app.addEventListener("submit", async event => {
       state.busy = false;
       render();
     }
-  } else if (event.target.id === "config" && !state.busy) {
+  } else if (event.target.id === "llm-config" && !state.busy) {
     const model = form.get("model");
+    if (!state.models.includes(model)) return;
+    if (event.submitter?.value === "test") {
+      state.busy = true;
+      state.modelTest = null;
+      show("Testing a short response. A cold model may take longer to load.");
+      try {
+        state.modelTest = await request("/api/model-test", {model});
+        show("Model responded successfully.");
+      } catch (error) {
+        show(error.message, true);
+      } finally {
+        state.busy = false;
+        render();
+      }
+    } else {
+      config = {...config, model};
+      localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
+      show("Model saved for all strategy screens.");
+    }
+  } else if (event.target.id === "config" && !state.busy) {
     const objective = form.get("objective").trim();
-    if (!state.models.includes(model) || !objective) {
-      show("Select an installed model and enter a strategy objective.", true);
+    if (!objective) {
+      show("Enter a strategy objective.", true);
       return;
     }
     const execution = {
@@ -965,7 +1013,7 @@ app.addEventListener("submit", async event => {
       cashBuffer: Number(form.get("cashBuffer")), scenarioMove: Number(form.get("scenarioMove")),
       paperAuto: form.get("paperAuto") === "on",
     };
-    config = {model, objective, maxPositions: Number(form.get("maxPositions")), execution};
+    config = {...config, objective, maxPositions: Number(form.get("maxPositions")), execution};
     localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
     state.view = "dashboard";
     show("AI strategy configuration saved.");
@@ -1077,6 +1125,11 @@ app.addEventListener("click", async event => {
     }
     case "config":
       state.view = "config";
+      show();
+      break;
+    case "llm-config":
+      state.view = "llm";
+      state.modelDraft = config.model;
       await loadModels();
       break;
     case "models":

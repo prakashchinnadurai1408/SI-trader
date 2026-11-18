@@ -3,6 +3,7 @@
 import http.client
 import json
 import math
+from time import perf_counter
 
 
 def ollama(path, payload=None):
@@ -23,6 +24,20 @@ def ollama(path, payload=None):
 
 def installed_models():
     return [entry["name"] for entry in ollama("/api/tags")["models"]]
+
+
+def test_model(model):
+    started = perf_counter()
+    result = ollama("/api/chat", {
+        "model": model, "stream": False, "think": False,
+        "options": {"temperature": 0, "num_ctx": 2048, "num_predict": 12},
+        "messages": [{"role": "user", "content": "Reply with the word OK."}],
+    })
+    message = result.get("message") if isinstance(result, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("The selected model returned no text. Try the test again or select another model.")
+    return {"model": model, "elapsedMs": round((perf_counter() - started) * 1000)}
 
 
 def generate_plan(model, objective, candidates, max_positions, active_scores=None, funding_context=None, research_context=None):
