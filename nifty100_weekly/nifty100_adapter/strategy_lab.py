@@ -8,10 +8,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest.monthly_inputs import load_inputs
+from .backtest.monthly_inputs import INPUTS, load_frozen_inputs, load_inputs
 from .backtest.compare_strategies import compare_results
 from .backtest.historical_intake import check
-from .backtest.monthly_backtester import run
+from .backtest.monthly_backtester import run_prepared
+from .backtest.research_store import archive_bundle, archived_folder, bundle_id, replay_decision
 from .strategy_builder import challenger_weights
 from .data.nse_market import MARKET_TIME, load_nifty100
 
@@ -102,28 +103,53 @@ def run_comparison(payload):
     proposal = payload.get("challenger")
     weights = challenger_weights(proposal) if proposal is not None else None
     configured = os.environ.get("SI_TRADER_STRATEGY_BUNDLE")
-    if not configured:
+    store = os.environ.get("SI_TRADER_RESEARCH_STORE")
+    identifier = payload.get("bundleId") or None
+    if identifier and not store:
+        raise ValueError("Set SI_TRADER_RESEARCH_STORE to use archived bundles.")
+    if not (configured or identifier):
         return {"readiness": {"ready": False, "issues": [
             "Set SI_TRADER_STRATEGY_BUNDLE to a prepared research bundle in the server environment."
         ]}}
-    folder = Path(configured)
-    readiness = check(folder, start, end)
+    folder = archived_folder(store, identifier) if identifier else Path(configured)
+    if not all((folder / name).is_file() for name in INPUTS):
+        return {"readiness": check(folder, start, end)}
+    try:
+        hashes, inputs = load_frozen_inputs(folder)
+        if identifier and bundle_id(hashes) != identifier:
+            raise ValueError("The archived bundle failed fingerprint verification.")
+    except (ValueError, OSError, KeyError) as error:
+        return {"readiness": {"ready": False, "issues": [str(error)]}}
+    readiness = check(folder, start, end, inputs)
     result = {"readiness": readiness}
     if not readiness["ready"] or not run_test:
         return result
 
-    equity, baseline = run(folder, start, end, capital)
-    defensive_equity, defensive = run(folder, start, end, capital, defensive=True)
+    if store and not identifier:
+        _, identifier = archive_bundle(folder, store)
+        if identifier != bundle_id(hashes):
+            raise ValueError("The bundle changed after readiness. Retry with a stable copy.")
+    equity, baseline = run_prepared(inputs, hashes, start, end, capital)
+    defensive_equity, defensive = run_prepared(inputs, hashes, start, end, capital, defensive=True)
     result.update({
         "baselineGate": baseline["gate_g1"],
         "capital": capital,
         "inputSha256": baseline["input_sha256"],
+        "bundleId": bundle_id(hashes), "archived": bool(identifier),
+        "lastDecision": baseline["coverage"][-1]["decision"],
         "comparisons": [compare_results(baseline, equity, defensive, defensive_equity)],
     })
     if weights is not None:
-        challenger_equity, challenger = run(folder, start, end, capital, weights=weights)
+        challenger_equity, challenger = run_prepared(inputs, hashes, start, end, capital, weights=weights)
         result["comparisons"].append(compare_results(baseline, equity, challenger, challenger_equity))
     return result
+
+
+def run_replay(payload):
+    store = os.environ.get("SI_TRADER_RESEARCH_STORE")
+    if not store:
+        raise ValueError("Set SI_TRADER_RESEARCH_STORE to replay archived decisions.")
+    return replay_decision(store, payload.get("bundleId"), payload.get("decision"), payload.get("isin"))
 
 
 def run_diagnostics(symbol, horizon, folder=None):

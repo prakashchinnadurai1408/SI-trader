@@ -14,7 +14,7 @@ from .full_catalogue import full_catalogue, readiness, run_report
 from .investright import broker_get, holdings_count
 from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
-from .strategy_lab import pulse, run_comparison, run_diagnostics
+from .strategy_lab import pulse, run_comparison, run_diagnostics, run_replay
 from .strategy_builder import build_research_strategy
 from .weekly_research import weekly_candidates, weekly_context
 from .trading_workspace import ENDPOINTS, affordable_candidates, broker_snapshot, cash_amount, number, paper_sizing
@@ -77,13 +77,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, pulse())
             elif self.path == "/api/models":
                 self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison"):
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("Provide a strategy configuration.")
+                if self.path == "/api/research-replay":
+                    self.send_json(200, run_replay(payload))
+                    return
                 if self.path == "/api/monthly-comparison":
                     self.send_json(200, run_comparison(payload))
                     return

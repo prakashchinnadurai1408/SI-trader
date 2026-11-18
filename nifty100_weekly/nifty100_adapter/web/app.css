@@ -203,3 +203,5 @@ td input { max-width: 90px; }
   .desk-more-links summary { padding: 7px 8px; }
   .desk-strategy-cards { grid-template-columns: 1fr; gap: 12px; }
 }
+
+.research-fingerprint { overflow-wrap: anywhere; }

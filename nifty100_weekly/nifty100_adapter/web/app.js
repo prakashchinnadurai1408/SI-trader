@@ -15,7 +15,8 @@ try {
 }
 const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
-  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
+  replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
+  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
   models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
@@ -542,6 +543,9 @@ function monthlyComparison() {
       <input id="monthly-end" name="end" type="month" required value="${escapeHtml(inputs.end)}">
       <label for="monthly-capital">Starting capital (INR)</label>
       <input id="monthly-capital" name="capital" type="number" min="1" max="1000000000" required value="${escapeHtml(inputs.capital)}">
+      <label for="monthly-bundle">Archived bundle fingerprint (optional)</label>
+      <input id="monthly-bundle" name="bundleId" pattern="[a-f0-9]{64}" maxlength="64" value="${escapeHtml(inputs.bundleId)}">
+      <p class="note">Leave blank to use the configured research bundle.</p>
       <label class="check"><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
         ${state.researchProposal ? "" : "disabled"}> Include the current AI factor challenger</label>
       ${state.researchProposal ? "" : '<p class="note">Generate a monthly proposal above to include it here.</p>'}
@@ -556,9 +560,42 @@ function monthlyComparison() {
       ${result.readiness.complete_months === undefined ? "" :
         `<p>${count(result.readiness.complete_months)} holdout months · ${count(result.readiness.sessions)} trading sessions</p>`}
       ${result.readiness.issues.length ? "<ul>" + result.readiness.issues.map(issue => "<li>" + escapeHtml(issue) + "</li>").join("") + "</ul>" : ""}
-      ${first ? `<p>Baseline Gate G1 <strong>${escapeHtml(result.baselineGate.status)}</strong> · Nifty 100 TRI total return <strong>${percent(first.benchmark_total_roi_pct)}</strong> · Starting capital <strong>${cash(result.capital)}</strong></p>` : ""}
+      ${first ? `<p>Baseline Gate G1 <strong>${escapeHtml(result.baselineGate.status)}</strong> · Nifty 100 TRI total return <strong>${percent(first.benchmark_total_roi_pct)}</strong> · Starting capital <strong>${cash(result.capital)}</strong></p>
+      <p class="note">${result.archived ? "Archived bundle" : "Input fingerprint"} <code class="research-fingerprint">${escapeHtml(result.bundleId)}</code></p>` : ""}
     </div>` : ""}
     ${first ? gridTable(["Strategy", "Net total return", "Net CAGR", "Max drawdown", "Downside capture", "Recovery sessions"], rows, "") : ""}
+  </section>`;
+}
+
+function researchReplay() {
+  const inputs = state.replayInputs;
+  const result = state.replayResult;
+  return `<section class="card desk-card">
+    <div class="desk-card-header"><h2>Replay a month-end decision</h2></div>
+    <p class="desk-copy">Use an archived bundle to see the evidence and baseline rank that were available for one stock on the decision date.</p>
+    <form id="research-replay" class="desk-copy">
+      <div class="form-grid">
+        <label for="replay-bundle">Archived bundle fingerprint
+          <input id="replay-bundle" name="bundleId" required pattern="[a-f0-9]{64}" maxlength="64" value="${escapeHtml(inputs.bundleId)}">
+        </label>
+        <label for="replay-decision">Month-end decision session
+          <input id="replay-decision" name="decision" type="date" required value="${escapeHtml(inputs.decision)}">
+        </label>
+        <label for="replay-isin">Stock ISIN
+          <input id="replay-isin" name="isin" required pattern="[A-Za-z]{2}[A-Za-z0-9]{9}[0-9]" maxlength="12" value="${escapeHtml(inputs.isin)}">
+        </label>
+      </div>
+      <div class="actions"><button class="secondary" ${state.busy ? "disabled" : ""}>Replay decision</button></div>
+      ${state.replayMessage ? `<p class="message ${state.replayError ? "error" : ""}" role="${state.replayError ? "alert" : "status"}">${escapeHtml(state.replayMessage)}</p>` : ""}
+    </form>
+    ${result ? `<div class="desk-copy">
+      <p><strong>${escapeHtml(result.symbol)}</strong> · ${escapeHtml(result.sector)} · ${escapeHtml(result.decisionDate)}</p>
+      <p>Snapshot known on ${escapeHtml(result.knownOn)} · Close ${cash(result.close)} · Baseline rank ${result.rank ?? "Unavailable"} · Target equity ${count(result.targetExposurePct.toFixed(1))}%</p>
+      <p>${result.failedChecks.length ? "Failed checks · " + escapeHtml(result.failedChecks.join(", ")) : "No failed checks in the archived snapshot."}</p>
+      ${gridTable(["Factor", "Archived value"], Object.entries(result.factors).map(([key, value]) =>
+        [escapeHtml(key.replaceAll("_", " ")), count(value)]), "")}
+      <p class="note">Source declarations · ${escapeHtml(Object.values(result.declaredSources).join(" · "))}</p>
+    </div>` : ""}
   </section>`;
 }
 
@@ -653,7 +690,7 @@ function dashboard() {
         ${brokerTab ? `<button class="secondary" data-action="refresh" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Syncing…" : "Refresh broker"}</button>` : ""}
         ${state.tab === "weekly" ? `<button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>` : ""}
       </header>
-      ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}${parameterRunPanel(state.researchProposal?.parameterRunReport)}</div>` :
+      ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}${researchReplay()}${parameterRunPanel(state.researchProposal?.parameterRunReport)}</div>` :
         state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() :
         state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() :
         state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() :
@@ -694,6 +731,7 @@ async function request(path, body) {
 app.addEventListener("input", event => {
   if (event.target.id === "research-objective") state.researchObjective = event.target.value;
   if (event.target.id === "committee-holdings") state.committeeHoldings = event.target.value;
+  if (event.target.form?.id === "research-replay") state.replayInputs[event.target.name] = event.target.value;
   if (event.target.form?.id === "monthly-comparison") {
     const field = event.target.name;
     state.monthlyInputs[field] = field === "includeAI" ? event.target.checked : event.target.value;
@@ -730,7 +768,7 @@ app.addEventListener("submit", async event => {
   } else if (event.target.id === "monthly-comparison" && !state.busy) {
     const run = event.submitter?.value === "run";
     state.monthlyInputs = {start: form.get("start"), end: form.get("end"), capital: Number(form.get("capital")),
-      includeAI: form.has("includeAI")};
+      includeAI: form.has("includeAI"), bundleId: form.get("bundleId").trim()};
     state.monthlyResult = null;
     state.busy = true;
     state.monthlyFeedback = run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.";
@@ -742,10 +780,34 @@ app.addEventListener("submit", async event => {
           kind: state.researchProposal.kind, schema_version: state.researchProposal.schema_version,
           weights: state.researchProposal.weights,
         } : null});
+      if (state.monthlyResult.archived) {
+        state.replayInputs.bundleId = state.monthlyResult.bundleId;
+        state.replayInputs.decision = state.monthlyResult.lastDecision;
+        state.replayResult = null;
+        state.replayMessage = "";
+      }
       state.monthlyFeedback = "";
     } catch (error) {
       state.monthlyFeedback = error.message;
       state.monthlyError = true;
+    } finally {
+      state.busy = false;
+      render();
+    }
+  } else if (event.target.id === "research-replay" && !state.busy) {
+    state.replayInputs = {bundleId: form.get("bundleId").trim(), decision: form.get("decision"),
+      isin: form.get("isin").trim().toUpperCase()};
+    state.replayResult = null;
+    state.replayMessage = "Checking the archived evidence.";
+    state.replayError = false;
+    state.busy = true;
+    render();
+    try {
+      state.replayResult = await request("/api/research-replay", state.replayInputs);
+      state.replayMessage = "";
+    } catch (error) {
+      state.replayMessage = error.message;
+      state.replayError = true;
     } finally {
       state.busy = false;
       render();

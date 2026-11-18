@@ -83,3 +83,18 @@ python -m nifty100_weekly.nifty100_adapter.backtest.compare_strategies --baselin
 ```
 
 The comparison rejects mismatched input fingerprints, equity dates, benchmarks, capital, and costs. It reports total ROI, annualized net return, drawdown, and 36-month head-to-head wins. A 100% relative ROI improvement means the challenger doubled a positive baseline ROI over the same period. With a zero or negative baseline, use the percentage-point difference instead. Synthetic or short datasets are inconclusive. No comparison promotes a challenger into the paper pilot or live execution.
+
+
+## Archive and replay research evidence
+
+Set `SI_TRADER_RESEARCH_STORE` to a local directory outside Git in the PowerShell session that starts the dashboard. With a prepared `SI_TRADER_STRATEGY_BUNDLE` also configured, a successful comparison archives the four required inputs in a directory named by their combined SHA-256 fingerprint. The dashboard shows the fingerprint. All variant runs use the same loaded inputs and cost declarations. To compare an older archived bundle, paste its fingerprint into **Monthly → Historical backtest**.
+
+To archive a prepared bundle independently or replay an archived baseline decision from PowerShell, run these commands from the checkout root.
+
+```powershell
+$research = 'nifty100_weekly.nifty100_adapter.backtest.research_store'
+python -m $research archive --store 'C:\data\si-trader-research' --data 'C:\data\g1-bundle'
+python -m $research replay --store 'C:\data\si-trader-research' --bundle-id '<fingerprint>' --decision '<YYYY-MM-DD>' --isin '<ISIN>'
+```
+
+The **Replay a month-end decision** form accepts the same inputs. After a comparison with archiving enabled, it fills the fingerprint and last decision date. Replay shows membership, the declared known-on date, score inputs, eligibility checks, baseline rank and exposure. The fingerprint detects changes to archived files. Source declarations establish recorded provenance. Verification of provider lineage, original publication time within a day, and reconstruction of missing historical data remain part of dataset preparation.

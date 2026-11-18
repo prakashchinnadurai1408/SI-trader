@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from .gate_g1 import gate_g1
-from .monthly_inputs import FACTORS, INPUTS, VETOES, file_hash, load_inputs
+from .monthly_inputs import FACTORS, VETOES, load_frozen_inputs
 from ..config.indian_cost_model import get_cost_model
 
 WEIGHTS = {"quality": 30, "momentum": 30, "volatility": 20, "value": 8,
@@ -280,9 +280,14 @@ def research_window(tri, start, end):
 
 
 def run(folder, start, end, capital, weights=None, defensive=False):
+    hashes, inputs = load_frozen_inputs(folder)
+    return run_prepared(inputs, hashes, start, end, capital, weights, defensive)
+
+
+def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False):
     if defensive and weights is not None:
         raise ValueError("Test the defensive overlay separately with the frozen factor weights.")
-    manifest, prices, snapshots, tri = load_inputs(folder)
+    manifest, prices, snapshots, tri = inputs
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("Starting capital must be finite and positive.")
     complete_months, dates = research_window(tri, start, end)
@@ -326,7 +331,7 @@ def run(folder, start, end, capital, weights=None, defensive=False):
     return equity, {
         "gate_g1": gate, "strategy": strategy_name,
         "factor_weights": WEIGHTS if weights is None else weights,
-        "input_sha256": {name: file_hash(Path(folder) / name) for name in INPUTS},
+        "input_sha256": hashes,
         "start_month": str(complete_months[0]), "end_month": str(complete_months[-1]),
         "starting_capital": capital, "coverage": coverage, "trades": portfolio.trades, "alerts": portfolio.alerts,
         "transaction_cost_model": asdict(portfolio.model),

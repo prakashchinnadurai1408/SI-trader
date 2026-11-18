@@ -19,6 +19,18 @@ def file_hash(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def fingerprint(folder):
+    return {name: file_hash(Path(folder) / name) for name in INPUTS}
+
+
+def load_frozen_inputs(folder):
+    before = fingerprint(folder)
+    inputs = load_inputs(folder)
+    if fingerprint(folder) != before:
+        raise ValueError("The research bundle changed while loading. Retry with a stable copy.")
+    return before, inputs
+
+
 def read_csv(path, required, dates):
     frame = pd.read_csv(path, dtype={"isin": "string", "symbol": "string", "sector": "string"})
     missing = sorted(set(required).difference(frame.columns))

@@ -166,13 +166,14 @@ def prepare(archives, tri_export, adjustments, snapshots, manifest_path, destina
     return len(prices)
 
 
-def check(folder, start, end):
+def check(folder, start, end, inputs=None):
     result = {"ready": False, "issues": [], "start": start, "end": end}
-    result["issues"] = [f"Missing {name}." for name in INPUTS if not (folder / name).is_file()]
+    if inputs is None:
+        result["issues"] = [f"Missing {name}." for name in INPUTS if not (folder / name).is_file()]
     if result["issues"]:
         return result
     try:
-        manifest, prices, snapshots, tri = load_inputs(folder)
+        manifest, prices, snapshots, tri = load_inputs(folder) if inputs is None else inputs
         months, dates = research_window(tri, start, end)
         result.update({"sessions": len(dates), "complete_months": len(months), "mode": manifest["mode"]})
         if manifest["mode"] != "research":
