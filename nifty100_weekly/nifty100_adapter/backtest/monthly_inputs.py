@@ -9,6 +9,7 @@ import pandas as pd
 
 FACTORS = ("quality", "value", "ownership", "earnings_revisions", "news_sentiment")
 VETOES = ("asm_gsm", "pledging_veto", "legal_veto", "regulatory_veto", "auditor_veto")
+TURNOVER = "traded_value_inr"
 PRICE_FIELDS = ("open", "high", "low", "close", "signal_close", "split_ratio", "dividend")
 SOURCES = ("prices", "snapshots", "tri")
 INPUTS = ("prices.csv", "snapshots.csv", "tri.csv", "manifest.json")
@@ -80,6 +81,11 @@ def load_inputs(folder):
     )
     tri = read_csv(folder / "tri.csv", ("date", "tri"), ("date",))
     numeric(prices, PRICE_FIELDS)
+    if TURNOVER in prices:
+        prices[TURNOVER] = pd.to_numeric(prices[TURNOVER], errors="raise").astype(float)
+        observed = prices[TURNOVER].dropna()
+        if not np.isfinite(observed).all() or observed.lt(0).any():
+            raise ValueError("Daily traded value must be finite and nonnegative when supplied.")
     numeric(snapshots, ("turnover_crore", *FACTORS))
     numeric(tri, ("tri",))
     for frame, key in ((prices, ("date", "isin")), (snapshots, ("date", "isin")), (tri, ("date",))):

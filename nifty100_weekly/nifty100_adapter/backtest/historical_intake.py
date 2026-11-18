@@ -13,7 +13,7 @@ import pandas as pd
 
 from ..data.nse_market import download
 from .monthly_backtester import build_signals, research_window
-from .monthly_inputs import INPUTS, file_hash, load_inputs, numeric, read_csv
+from .monthly_inputs import INPUTS, TURNOVER, file_hash, load_inputs, numeric, read_csv
 
 CUTOVER = date(2024, 7, 8)
 ARCHIVE_LIMIT = 8_000_000
@@ -74,8 +74,10 @@ def archive_rows(path, allowed_isins, expected_day=None):
     )
     if not set(fields).issubset(rows.columns) or rows.empty:
         raise ValueError(f"{path.name}: unrecognized NSE bhavcopy schema.")
-    rows = rows[list(fields)].copy()
-    rows.columns = ["date", "isin", "series", *OHLC]
+    turnover = "TtlTrfVal" if modern else "TOTTRDVAL"
+    has_turnover = turnover in rows
+    rows = rows[list(fields) + ([turnover] if has_turnover else [])].copy()
+    rows.columns = ["date", "isin", "series", *OHLC] + ([TURNOVER] if has_turnover else [])
     rows["date"] = pd.to_datetime(rows["date"].str.strip(), format="%Y-%m-%d" if modern else "%d-%b-%Y", errors="raise")
     if rows["date"].isna().any() or rows["date"].nunique() != 1:
         raise ValueError(f"{path.name}: expected exactly one dated exchange session.")
@@ -87,7 +89,7 @@ def archive_rows(path, allowed_isins, expected_day=None):
     if rows.duplicated(["isin", "series"]).any():
         raise ValueError(f"{path.name}: duplicate security and series.")
     rows = rows.sort_values("series").drop_duplicates("isin")
-    numeric(rows, OHLC)
+    numeric(rows, (*OHLC, TURNOVER) if has_turnover else OHLC)
     return rows.drop(columns="series")
 
 

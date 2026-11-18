@@ -106,6 +106,10 @@ def compare_results(baseline, left, challenger, right):
         "challenger_max_drawdown_pct": challenger_metrics["maximum_daily_drawdown"] * 100,
         "challenger_vs_baseline_36m_wins": paired["rolling_36m_wins"],
         "rolling_36m_windows": paired["rolling_36m_windows"],
+        "baseline_turnover_pct": baseline.get("average_rebalance_turnover_pct"),
+        "variant_turnover_pct": challenger.get("average_rebalance_turnover_pct"),
+        "baseline_ranking": baseline.get("ranking_outcomes"),
+        "variant_ranking": challenger.get("ranking_outcomes"),
         "baseline_downside": downside_metrics(left), "variant_downside": downside_metrics(right),
         "warning": "A comparison is historical. The challenger cannot approve a pilot or live orders.",
     }

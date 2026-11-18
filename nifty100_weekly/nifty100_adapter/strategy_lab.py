@@ -12,6 +12,7 @@ from .backtest.monthly_inputs import INPUTS, load_frozen_inputs, load_inputs
 from .backtest.compare_strategies import compare_results
 from .backtest.historical_intake import check
 from .backtest.monthly_backtester import run_prepared
+from .backtest.price_experiments import EXPERIMENTS, trailing_features
 from .backtest.research_store import archive_bundle, archived_folder, bundle_id, replay_decision
 from .strategy_builder import challenger_weights
 from .data.nse_market import MARKET_TIME, load_nifty100
@@ -100,6 +101,9 @@ def run_comparison(payload):
     run_test = payload.get("run")
     if type(run_test) is not bool:
         raise ValueError("Choose a readiness check or strategy comparison.")
+    experiments = payload.get("testPriceInputs", False)
+    if type(experiments) is not bool:
+        raise ValueError("Choose whether to include the price-input experiments.")
     proposal = payload.get("challenger")
     weights = challenger_weights(proposal) if proposal is not None else None
     configured = os.environ.get("SI_TRADER_STRATEGY_BUNDLE")
@@ -142,6 +146,15 @@ def run_comparison(payload):
     if weights is not None:
         challenger_equity, challenger = run_prepared(inputs, hashes, start, end, capital, weights=weights)
         result["comparisons"].append(compare_results(baseline, equity, challenger, challenger_equity))
+    if experiments:
+        result["experimentIssues"] = []
+        for experiment, label in EXPERIMENTS.items():
+            try:
+                test_equity, test_report = run_prepared(inputs, hashes, start, end, capital, experiment=experiment)
+            except ValueError as error:
+                result["experimentIssues"].append({"name": label, "issue": str(error)})
+                continue
+            result["comparisons"].append(compare_results(baseline, equity, test_report, test_equity))
     return result
 
 
@@ -174,4 +187,11 @@ def run_diagnostics(symbol, horizon, folder=None):
     series = prices.xs(candidates[0], level="isin")
     if series.index[-1] < as_of:
         raise ValueError("The selected stock lacks a close on the latest covered market session.")
-    return {"symbol": symbol, "source": "Configured research bundle", **diagnostics(series, tri, horizon, as_of)}
+    members = snapshots.loc[latest_date, ["sector"]]
+    features = trailing_features(prices, tri, as_of, members).loc[candidates[0]]
+    return {
+        "symbol": symbol, "source": "Configured research bundle",
+        **diagnostics(series, tri, horizon, as_of),
+        "featureSnapshot": latest_date.date().isoformat(),
+        "trailingInputs": {key: round(float(value), 6) if pd.notna(value) else None for key, value in features.items()},
+    }

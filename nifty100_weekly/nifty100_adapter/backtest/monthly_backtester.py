@@ -11,6 +11,7 @@ import pandas as pd
 
 from .gate_g1 import gate_g1
 from .monthly_inputs import FACTORS, VETOES, load_frozen_inputs
+from .price_experiments import EXPERIMENTS, apply_experiment, ranking_outcomes, trailing_features
 from ..config.indian_cost_model import get_cost_model
 
 WEIGHTS = {"quality": 30, "momentum": 30, "volatility": 20, "value": 8,
@@ -211,7 +212,7 @@ class Portfolio:
                 continue
             cash_budget = max(0, self.cash - CASH_BUFFER * nav)
             sector_room = max(0, SECTOR_CAP * nav - sector_value.get(stock.sector, 0))
-            cap = min(max(0, turnover_room), cash_budget, sector_room)
+            cap = min(max(0, turnover_room), cash_budget, sector_room, stock.get("buy_capacity_inr", math.inf))
             qty = max(0, min(desired_shares[isin] - current_qty, math.floor(cap / price)))
             if qty:
                 fixed_fee = self.fee(price, 0, True)
@@ -229,7 +230,7 @@ def defensive_exposure(observed):
     return 0.25 if month_ends.iloc[-1] < month_ends.mean() else 0.95
 
 
-def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=False):
+def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=False, experiment=None):
     if decision not in snapshots.index.get_level_values("date"):
         raise ValueError(f"Missing point-in-time Nifty 100 snapshot for {decision.date()}.")
     snapshot = snapshots.loc[decision]
@@ -247,17 +248,19 @@ def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=F
         exposure = min(exposure, 0.50)
     if defensive:
         exposure = defensive_exposure(observed)
+    if experiment:
+        scores = apply_experiment(scores, trailing_features(prices, tri, decision, snapshot[["sector"]]), experiment, decision)
     return scores, snapshot, float(exposure), scoreable
 
 
-def build_signals(prices, snapshots, tri, dates, complete_months, weights=None, defensive=False):
+def build_signals(prices, snapshots, tri, dates, complete_months, weights=None, defensive=False, experiment=None):
     sessions = pd.Series(tri.index, index=tri.index.to_period("M"))
     signals = {}
     coverage = []
     for month in complete_months - 1:
         previous = sessions.loc[month]
         decision = previous.iloc[-1] if isinstance(previous, pd.Series) else previous
-        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights, defensive)
+        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights, defensive, experiment)
         execution = dates[dates.to_period("M") == month + 1][0]
         signals[execution] = (scores, snapshot, exposure, decision)
         coverage.append({"decision": str(decision.date()), "execution": str(execution.date()),
@@ -284,7 +287,9 @@ def run(folder, start, end, capital, weights=None, defensive=False):
     return run_prepared(inputs, hashes, start, end, capital, weights, defensive)
 
 
-def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False):
+def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False, experiment=None):
+    if experiment is not None and (experiment not in EXPERIMENTS or weights is not None or defensive):
+        raise ValueError("Select one price-input experiment against the fixed baseline.")
     if defensive and weights is not None:
         raise ValueError("Test the defensive overlay separately with the frozen factor weights.")
     manifest, prices, snapshots, tri = inputs
@@ -292,12 +297,13 @@ def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=Fa
         raise ValueError("Starting capital must be finite and positive.")
     complete_months, dates = research_window(tri, start, end)
     baseline = tri.index[tri.index < dates[0]][-1]
-    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights, defensive)
+    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights, defensive, experiment)
     week_ends = set(dates.to_series().groupby(dates.to_period("W-FRI")).max())
     ledger = [{"date": baseline, "equity": capital, "cash": capital, "benchmark": float(tri.loc[baseline])}]
     peak_nav = capital
     portfolio = Portfolio(capital, manifest)
     price_days = set(prices.index.get_level_values("date"))
+    turnover = []
     for day in dates:
         if day not in price_days:
             raise ValueError(f"Missing NSE prices for benchmark session {day.date()}.")
@@ -310,6 +316,7 @@ def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=Fa
             portfolio.rebalance(quotes, *signals[day])
             new_trades = portfolio.trades[first_trade:]
             traded = sum(trade["open"] * trade["quantity"] for trade in new_trades) / open_nav
+            turnover.append(traded * 100)
             if traded > TURNOVER_CAP + 1e-9:
                 portfolio.alerts.append({"date": str(day.date()), "type": "forced_exit_turnover", "value": traded})
         nav = portfolio.equity(quotes, "close")
@@ -325,6 +332,8 @@ def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=Fa
             portfolio.alerts.append({"date": str(day.date()), "type": "weekly_drawdown", "value": 1 - nav / peak_nav})
     equity = pd.DataFrame.from_records(ledger).set_index("date")
     strategy_name = "monthly_defensive" if defensive else "monthly_challenger" if weights is not None else "monthly_baseline"
+    if experiment:
+        strategy_name = "monthly_" + experiment
     gate = gate_g1(equity, complete_months, manifest["mode"] == "research" and strategy_name == "monthly_baseline")
     if strategy_name != "monthly_baseline":
         gate["qualification_note"] = "An experimental variant cannot authorize the frozen Gate G1 pilot."
@@ -336,6 +345,8 @@ def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=Fa
         "starting_capital": capital, "coverage": coverage, "trades": portfolio.trades, "alerts": portfolio.alerts,
         "transaction_cost_model": asdict(portfolio.model),
         "data_manifest": manifest,
+        "average_rebalance_turnover_pct": sum(turnover) / len(turnover) if turnover else None,
+        "ranking_outcomes": ranking_outcomes(prices, tri, dates, signals, BASKET),
     }
 
 

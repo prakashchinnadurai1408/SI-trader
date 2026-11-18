@@ -98,3 +98,14 @@ python -m $research replay --store 'C:\data\si-trader-research' --bundle-id '<fi
 ```
 
 The **Replay a month-end decision** form accepts the same inputs. After a comparison with archiving enabled, it fills the fingerprint and last decision date. Replay shows membership, the declared known-on date, score inputs, eligibility checks, baseline rank and exposure. The fingerprint detects changes to archived files. Source declarations establish recorded provenance. Verification of provider lineage, original publication time within a day, and reconstruction of missing historical data remain part of dataset preparation.
+
+
+## Matched price-input experiments
+
+In **Monthly → Historical backtest**, select **Test sector momentum, downside risk, and trade capacity separately**. The variants use the same bundle, dates, costs and base portfolio rules. They are research experiments and cannot qualify for Gate G1.
+
+- **Sector momentum:** Blend a 20% percentile score based on 21- and 63-session adjusted returns relative to the median of other same-sector constituents in the dated decision snapshot. Each horizon requires at least two other qualified peers.
+- **Downside risk:** Blend a 20% percentile score favoring lower downside beta and smaller overnight downside gaps over 63 sessions. Use at least 12 negative benchmark sessions for beta and at least 45 qualifying gaps. Adjust openings for splits and omit dividend sessions when calculating gaps.
+- **Trade capacity:** Preserve rank and cap each buy at 0.5% of trailing 20-session median traded value. Orders without 20 observations receive no buy allocation for the experiment. Sell and mandatory-exit rules follow the baseline. Include optional nonnegative `traded_value_inr` in `prices.csv`; historical intake preserves it when present in the NSE ZIP. Older bundles remain usable for the baseline.
+
+Each experiment requires the new input for at least 90% of baseline-eligible stocks at every decision. Missing rank inputs receive a neutral percentile when the minimum coverage passes. The comparison shows skipped research variants, portfolio net returns, drawdown, average rebalance turnover, and 5- and 21-session top-rank hit rates. Hit rates are benchmark-relative close-to-close diagnostics for the top 12 ranked names and include only windows ending inside the holdout. They are separate from portfolio returns after costs.

@@ -16,7 +16,7 @@ try {
 const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
-  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
+  monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, testPriceInputs: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
   models: [], lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
@@ -521,15 +521,22 @@ function monthlyComparison() {
   const comparisons = result?.comparisons;
   const first = comparisons?.[0];
   const recovery = downside => downside.worst_drawdown_to_recovery_sessions ?? "Unrecovered";
+  const labels = {monthly_defensive: "Defensive trend", monthly_challenger: "AI factor challenger",
+    monthly_sector_momentum: "Sector-relative momentum", monthly_downside_risk: "Downside beta and gap risk",
+    monthly_trade_capacity: "Trade-capacity buy cap"};
+  const hitRate = (outcomes, horizon) => {
+    const item = outcomes?.[horizon];
+    return item?.winRatePct == null ? "—" : percent(item.winRatePct) + " (" + count(item.observed) + "/" + count(item.attempts) + ")";
+  };
   const rows = first ? [
     ["Monthly baseline", percent(first.baseline_total_roi_pct), percent(first.baseline_net_cagr_pct),
       percent(first.baseline_max_drawdown_pct), percent(first.baseline_downside.downside_capture_pct),
-      count(recovery(first.baseline_downside))],
+      count(recovery(first.baseline_downside)), percent(first.baseline_turnover_pct), hitRate(first.baseline_ranking, 5), hitRate(first.baseline_ranking, 21)],
     ...comparisons.map(item => [
-      item.variant === "monthly_defensive" ? "Defensive trend" : "AI factor challenger",
+      labels[item.variant] || escapeHtml(item.variant),
       percent(item.challenger_total_roi_pct), percent(item.challenger_net_cagr_pct),
       percent(item.challenger_max_drawdown_pct), percent(item.variant_downside.downside_capture_pct),
-      count(recovery(item.variant_downside)),
+      count(recovery(item.variant_downside)), percent(item.variant_turnover_pct), hitRate(item.variant_ranking, 5), hitRate(item.variant_ranking, 21),
     ]),
   ] : [];
   return `<section class="card desk-card">
@@ -546,6 +553,8 @@ function monthlyComparison() {
       <label for="monthly-bundle">Archived bundle fingerprint (optional)</label>
       <input id="monthly-bundle" name="bundleId" pattern="[a-f0-9]{64}" maxlength="64" value="${escapeHtml(inputs.bundleId)}">
       <p class="note">Leave blank to use the configured research bundle.</p>
+      <label class="check"><input type="checkbox" name="testPriceInputs" ${inputs.testPriceInputs ? "checked" : ""}>
+        Test sector momentum, downside risk, and trade capacity separately</label>
       <label class="check"><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
         ${state.researchProposal ? "" : "disabled"}> Include the current AI factor challenger</label>
       ${state.researchProposal ? "" : '<p class="note">Generate a monthly proposal above to include it here.</p>'}
@@ -563,7 +572,11 @@ function monthlyComparison() {
       ${first ? `<p>Baseline Gate G1 <strong>${escapeHtml(result.baselineGate.status)}</strong> · Nifty 100 TRI total return <strong>${percent(first.benchmark_total_roi_pct)}</strong> · Starting capital <strong>${cash(result.capital)}</strong></p>
       <p class="note">${result.archived ? "Archived bundle" : "Input fingerprint"} <code class="research-fingerprint">${escapeHtml(result.bundleId)}</code></p>` : ""}
     </div>` : ""}
-    ${first ? gridTable(["Strategy", "Net total return", "Net CAGR", "Max drawdown", "Downside capture", "Recovery sessions"], rows, "") : ""}
+    ${result?.experimentIssues?.length ? `<ul class="desk-copy">${result.experimentIssues.map(item =>
+      `<li><strong>${escapeHtml(item.name)}</strong> · ${escapeHtml(item.issue)}</li>`).join("")}</ul>` : ""}
+    ${first ? `<p class="desk-copy note">Top-rank hit rates show adjusted close-to-close outperformance versus Nifty 100 TRI, with observed samples / eligible samples. Portfolio returns include modeled costs.</p>
+      ${gridTable(["Strategy", "Net total return", "Net CAGR", "Max drawdown", "Downside capture", "Recovery sessions",
+        "Average rebalance turnover", "5-session rank hit rate", "21-session rank hit rate"], rows, "")}` : ""}
   </section>`;
 }
 
@@ -649,6 +662,15 @@ function strategyLab() {
       ${!lab.historyConfigured ? '<p class="desk-copy note">Set SI_TRADER_STRATEGY_BUNDLE in the server environment to enable diagnostics on verified-format historical inputs.</p>' : ""}
       ${result ? `<p class="desk-copy"><strong>${escapeHtml(result.symbol)}</strong> · ${escapeHtml(result.asOf)} · ${count(result.sessions)} sessions · Close ${cash(result.close)}</p>
         ${gridTable(["Diagnostic", "Value"], metrics.map(([label, key, suffix]) => [label, count(result.metrics[key]) + (suffix || "")]), "")}
+        ${result.trailingInputs ? `<details class="desk-copy" open><summary>Price inputs to test</summary>
+          <p class="note">Sector peers from the ${escapeHtml(result.featureSnapshot)} membership snapshot. Spread and order book data are outside the traded-value estimate.</p>
+          ${gridTable(["Input", "Value"], [
+            ["21-session sector-relative return", percent(result.trailingInputs.relative21 == null ? null : result.trailingInputs.relative21 * 100)],
+            ["63-session sector-relative return", percent(result.trailingInputs.relative63 == null ? null : result.trailingInputs.relative63 * 100)],
+            ["Downside beta", count(result.trailingInputs.downside_beta)],
+            ["90th-percentile overnight downside gap", percent(result.trailingInputs.gap_risk == null ? null : result.trailingInputs.gap_risk * 100)],
+            ["20-session median traded value", cash(result.trailingInputs.median_turnover)],
+          ], "")}</details>` : ""}
         <details class="desk-copy" open><summary>Simulated return range</summary>
           <p class="note">${escapeHtml(result.stress.assumption)}. Scenario percentiles do not predict actual returns.</p>
           ${gridTable(["Session", ...result.stress.percentiles.map(value => "P" + value)],
@@ -734,7 +756,7 @@ app.addEventListener("input", event => {
   if (event.target.form?.id === "research-replay") state.replayInputs[event.target.name] = event.target.value;
   if (event.target.form?.id === "monthly-comparison") {
     const field = event.target.name;
-    state.monthlyInputs[field] = field === "includeAI" ? event.target.checked : event.target.value;
+    state.monthlyInputs[field] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
   }
 });
 
@@ -768,7 +790,7 @@ app.addEventListener("submit", async event => {
   } else if (event.target.id === "monthly-comparison" && !state.busy) {
     const run = event.submitter?.value === "run";
     state.monthlyInputs = {start: form.get("start"), end: form.get("end"), capital: Number(form.get("capital")),
-      includeAI: form.has("includeAI"), bundleId: form.get("bundleId").trim()};
+      includeAI: form.has("includeAI"), testPriceInputs: form.has("testPriceInputs"), bundleId: form.get("bundleId").trim()};
     state.monthlyResult = null;
     state.busy = true;
     state.monthlyFeedback = run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.";
