@@ -31,3 +31,11 @@ On first use, complete the Claude Code sign-in in that profile. Run the same lau
 - [Firecrawl AnyDoc](https://github.com/firecrawl/anydoc)
 - [Claude Code Setup](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/claude-code-setup)
 - [Anthropic Agent Skills](https://github.com/anthropics/skills)
+
+## Arena strategy review
+
+The local development checkout uses [Arena Mode](https://github.com/irr/arena-mode) as a Claude Code project skill. The upstream checkout sits beside SI-Trader under `SI-Trader-Agent-Tools/arena-mode`. Copy its `skills/arena/SKILL.md` to `.claude/skills/arena/SKILL.md` for a fresh local setup. Use the launcher above to open Claude Code, and complete sign-in if prompted. The local skill copy enables the bare `/arena` command.
+
+Open **Review with /arena** on Weekly, Monthly, Top 10 watchlist, Full 48 research, or Three-agent review. Copy the generated command into Claude Code. The default uses three independent solvers and a judge. Monthly supplies the completed comparison fingerprint and measured metrics when available. The review brief excludes broker account details.
+
+Before a strategy review, prepare a fixed research brief with the parameter report, data gaps, date range, costs, risk limits and benchmark. Use a chronological validation period for proposing and comparing alternatives. Keep the final holdout unused until the rules and candidate are frozen. Compare net returns, drawdown, turnover and data quality. An Arena review without historical evidence can identify missing tests but cannot establish predictive accuracy. Use the existing paper and execution gates.

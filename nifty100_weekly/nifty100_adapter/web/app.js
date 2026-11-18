@@ -680,6 +680,60 @@ function strategyLab() {
   </div>`;
 }
 
+const arenaStrategies = {
+  weekly: "weekly Nifty 100 paper strategy",
+  monthly: "monthly Nifty 100 baseline and each completed comparison variant",
+  watchlist: "Nifty 100 research watchlist ranking",
+  full: "full 48-parameter Nifty 100 research screen",
+  committee: "Nifty 100 three-agent research strategy",
+};
+
+function arenaCommand(tab) {
+  const toPct = value => Number.isFinite(value) ? value.toFixed(2) + "%" : "unmeasured";
+  const strategy = arenaStrategies[tab];
+  const pieces = [
+    "Review the " + strategy + ". Give each solver identical admissible evidence and have the judge review anonymized proposals.",
+    "Check point-in-time timing and membership, source coverage, verified vetoes, realistic fills and costs, and overfitting.",
+    "Rank by defensible out-of-sample net return, drawdown, turnover and evidence quality. Cite the measured result or state insufficient evidence. Agent agreement is not predictive accuracy.",
+    "Keep this review read-only. Leave broker actions, strategy promotion, and order submission outside the review.",
+  ];
+  if (tab === "monthly") {
+    const result = state.monthlyResult;
+    if (result?.comparisons?.length) {
+      const baseline = result.comparisons[0];
+      pieces.push("Matched comparison " + result.readiness.start + " to " + result.readiness.end + ", bundle " + result.bundleId
+        + ", baseline net CAGR " + toPct(baseline.baseline_net_cagr_pct) + ", maximum drawdown " + toPct(baseline.baseline_max_drawdown_pct) + ".");
+      for (const item of result.comparisons) {
+        pieces.push(item.variant + " net CAGR " + toPct(item.challenger_net_cagr_pct)
+          + ", maximum drawdown " + toPct(item.challenger_max_drawdown_pct) + ", average turnover " + toPct(item.variant_turnover_pct) + ".");
+      }
+      if (result.experimentIssues?.length) pieces.push(result.experimentIssues.length + " price-input experiments were skipped.");
+    } else {
+      pieces.push("No completed matched historical comparison is available in this session. Recommend the next test and abstain from declaring a performance winner.");
+    }
+  } else {
+    const weekly = state.plan?.parameterRunReport;
+    const result = {weekly, watchlist: state.watchlist, full: state.fullCatalogue, committee: state.committee}[tab];
+    if (result && Number.isInteger(result.complete) && Number.isInteger(result.total)) {
+      pieces.push("Catalogue coverage " + result.complete + " of " + result.total + " complete.");
+    }
+    pieces.push("This view is research or paper only. Review the 48-Parameter Run Report and require a separate chronological, cost-adjusted benchmark comparison before ranking predictive performance.");
+  }
+  return '/arena "' + pieces.join(" ") + '" n=3 strategy=judge';
+}
+
+function arenaReview(tab) {
+  if (!arenaStrategies[tab]) return "";
+  return `<details class="card desk-arena">
+    <summary>Review with /arena</summary>
+    <p>Copy a review brief for Claude Code. Reviewers compare the same evidence and flag what still needs testing.</p>
+    <label for="arena-command">Claude Code command</label>
+    <textarea id="arena-command" rows="5" readonly>${escapeHtml(arenaCommand(tab))}</textarea>
+    <div class="actions"><button class="secondary" data-action="copy-arena">Copy /arena command</button>
+      <span id="arena-status" role="status"></span></div>
+  </details>`;
+}
+
 function dashboard() {
   const primary = [["home", "Home"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["feeds", "Data feeds"], ["portfolio", "Portfolio"]];
   const tools = [["lab", "Strategy Lab"], ["watchlist", "Top 10 watchlist"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["execution", "Execution"]];
@@ -712,6 +766,7 @@ function dashboard() {
         ${brokerTab ? `<button class="secondary" data-action="refresh" ${state.syncing ? "disabled" : ""}>${state.syncing ? "Syncing…" : "Refresh broker"}</button>` : ""}
         ${state.tab === "weekly" ? `<button class="${state.halted ? "secondary" : "danger"}" data-action="${state.halted ? "resume" : "halt"}">${state.halted ? "Reset kill switch" : "Kill switch"}</button>` : ""}
       </header>
+      ${arenaReview(state.tab)}
       ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}${researchReplay()}${parameterRunPanel(state.researchProposal?.parameterRunReport)}</div>` :
         state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() :
         state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() :
@@ -997,6 +1052,19 @@ app.addEventListener("click", async event => {
         render();
       }
       break;
+    case "copy-arena": {
+      const command = document.querySelector("#arena-command");
+      const status = document.querySelector("#arena-status");
+      try {
+        await navigator.clipboard.writeText(command.value);
+        status.textContent = "Copied. Paste the command into Claude Code.";
+      } catch {
+        command.focus();
+        command.select();
+        status.textContent = "Command selected. Press Ctrl+C to copy.";
+      }
+      break;
+    }
     case "export-research": {
       if (!state.researchProposal) break;
       const url = URL.createObjectURL(new Blob([JSON.stringify(state.researchProposal, null, 2)], {type: "application/json"}));
