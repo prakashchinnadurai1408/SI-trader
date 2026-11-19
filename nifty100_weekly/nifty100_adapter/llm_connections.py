@@ -74,7 +74,7 @@ def profiles():
 
 
 def validate_endpoint(value):
-    if len(value) > 2048 or any(ord(char) <= 32 for char in value):
+    if not isinstance(value, str) or len(value) > 2048 or any(ord(char) <= 32 for char in value):
         raise ValueError("Enter a valid HTTPS API base URL.")
     url = urlsplit(value)
     if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
@@ -89,6 +89,8 @@ def save_profile(payload):
     label, model = payload.get("label"), payload.get("model")
     if any(not isinstance(v, str) or not 1 <= len(v.strip()) <= cap for v, cap in ((label, 80), (model, 160))):
         raise ValueError("Enter a connection name and exact model ID.")
+    if "@" in model or any(char.isspace() for char in model.strip()):
+        raise ValueError("Model ID must be the provider's model identifier, such as z-ai/glm-5.3-flash. Enter a descriptive name in Connection name.")
     endpoint = payload.get("endpoint") or PROVIDERS[provider][1]
     if not isinstance(endpoint, str):
         raise ValueError("Enter an API base URL.")
@@ -136,6 +138,8 @@ def chat(identifier, payload):
     if row is None or not row["secret"]:
         raise ValueError("The model connection or its API key was deleted. Configure it again.")
     key = protect(row["secret"], decrypt=True).decode()
+    if "@" in row["model"]:
+        raise ValueError("This connection has an email address in Model ID. Edit it and choose a provider model.")
     messages = list(payload["messages"])
     if any(message.get("images") for message in messages):
         raise ValueError("Cloud connections currently support text research. Choose a local vision model for screenshot review.")
@@ -159,6 +163,9 @@ def chat(identifier, payload):
                 "max_tokens": max(128, options.get("num_predict", 900))}
         if row["provider"] == "openai":
             body["max_completion_tokens"] = body.pop("max_tokens")
+        if row["provider"] == "nvidia" and row["model"].startswith("z-ai/glm-5.3"):
+            body["reasoning_effort"] = "low"
+            body["max_tokens"] = max(1024, body["max_tokens"])
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
     try:
@@ -175,8 +182,51 @@ def chat(identifier, payload):
             raise ValueError("The selected model returned no text.")
         return {"message": {"content": content}}
     except HTTPError as error:
+        if error.code == 404:
+            raise ValueError("Provider could not find this model or API route (HTTP 404). Edit the connection, load available models, and check the API base URL.") from None
         raise ValueError(f"Provider returned HTTP {error.code}. Check the key, model access, quota and API endpoint.") from None
     except (URLError, OSError, http.client.HTTPException):
         raise ValueError("Could not reach the provider in time. Check the connection and retry.") from None
     except (KeyError, TypeError, json.JSONDecodeError):
         raise ValueError("Provider returned an unsupported response format.") from None
+
+
+def provider_models(payload):
+    provider = payload.get("provider")
+    if not isinstance(provider, str) or provider not in PROVIDERS:
+        raise ValueError("Choose a provider.")
+    endpoint = validate_endpoint(payload.get("endpoint") or PROVIDERS[provider][1])
+    key = payload.get("apiKey") or ""
+    if not isinstance(key, str) or any(ord(char) < 32 for char in key):
+        raise ValueError("Enter a valid API key.")
+    identifier = payload.get("id")
+    if identifier is not None and (not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier)):
+        raise ValueError("Choose a saved connection.")
+    if not key and identifier:
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM profiles WHERE id=?", (payload["id"],)).fetchone()
+        if row and row["provider"] == provider and row["endpoint"] == endpoint and row["secret"]:
+            key = protect(row["secret"], True).decode()
+    if not key:
+        raise ValueError("Enter an API key or edit a saved connection that has a key.")
+    headers = {"Accept": "application/json"}
+    if PROVIDERS[provider][2] == "anthropic":
+        headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+    else:
+        headers["Authorization"] = "Bearer " + key
+    try:
+        with build_opener(NoRedirect()).open(Request(endpoint + "/models", headers=headers), timeout=20) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError("Provider model list exceeds the supported size.")
+        data = json.loads(raw)
+        models = sorted({item["id"] for item in data["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)})
+        if not models:
+            raise ValueError("The provider returned no available model IDs.")
+        return {"models": models}
+    except HTTPError as error:
+        raise ValueError(f"Model listing returned HTTP {error.code}. Check the endpoint and key, or enter the model ID from your provider console.") from None
+    except (OSError, http.client.HTTPException):
+        raise ValueError("Could not retrieve the provider model list. Retry or enter its exact model ID.") from None
+    except (KeyError, TypeError, json.JSONDecodeError):
+        raise ValueError("Provider model listing has an unsupported format. Enter the exact model ID from its console.") from None

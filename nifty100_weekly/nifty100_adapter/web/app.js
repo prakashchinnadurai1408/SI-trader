@@ -17,7 +17,7 @@ const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, testPriceInputs: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
-  providers: [], profiles: [], connectionDraft: {},
+  providers: [], profiles: [], connectionDraft: {}, providerModels: [],
   models: [], modelDraft: "", modelTest: null, lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
@@ -187,13 +187,16 @@ function llmConfig() {
       <label for="connection-label">Connection name</label>
       <input id="connection-label" name="label" maxlength="80" required value="${escapeHtml(state.connectionDraft.label || "")}" placeholder="My research model">
       <label for="connection-model">Model ID</label>
-      <input id="connection-model" name="model" maxlength="160" required value="${escapeHtml(state.connectionDraft.model || "")}" placeholder="Exact model ID from your provider">
+      <input id="connection-model" name="model" list="provider-model-options" maxlength="160" required autocomplete="off" value="${escapeHtml(state.connectionDraft.model || "")}" placeholder="Exact model ID from your provider">
+      <datalist id="provider-model-options">${state.providerModels.map(id => `<option value="${escapeHtml(id)}"></option>`).join("")}</datalist>
+      <p class="note">Use the exact provider model ID here. Your sign-in email belongs in the sign-in screen.</p>
       <label for="connection-endpoint">API base URL</label>
       <input id="connection-endpoint" name="endpoint" type="url" required value="${escapeHtml(state.connectionDraft.endpoint || state.providers.find(item => item.id === (state.connectionDraft.provider || "claude"))?.endpoint || "")}">
       <label for="api-key">API key</label>
       <input id="api-key" name="apiKey" type="password" autocomplete="off" maxlength="8192" ${state.connectionDraft.hasKey ? "" : "required"} placeholder="${state.connectionDraft.hasKey ? "Leave blank to retain the saved key" : "Enter provider API key"}">
       <div class="actions">
         <button ${state.busy ? "disabled" : ""}>Save connection</button>
+        <button type="button" class="secondary" data-action="provider-models" ${state.busy ? "disabled" : ""}>Load available models</button>
         ${state.connectionDraft.id ? '<button type="button" class="secondary" data-action="new-connection">Add another connection</button>' : ""}
       </div>
     </form>
@@ -880,6 +883,7 @@ app.addEventListener("input", event => {
 
 app.addEventListener("change", event => {
   if (event.target.id === "provider") {
+    state.providerModels = [];
     state.connectionDraft = {...state.connectionDraft, provider: event.target.value, hasKey: false,
       label: document.querySelector("#connection-label").value, model: document.querySelector("#connection-model").value,
       endpoint: state.providers.find(item => item.id === event.target.value)?.endpoint || ""};
@@ -1202,12 +1206,37 @@ app.addEventListener("click", async event => {
     case "models":
       await loadModels();
       break;
+    case "provider-models": {
+      if (state.busy) break;
+      const form = document.querySelector("#cloud-connection");
+      const payload = Object.fromEntries(new FormData(form));
+      if (state.connectionDraft.id) payload.id = state.connectionDraft.id;
+      state.connectionDraft = {...state.connectionDraft, provider: payload.provider, label: payload.label,
+        model: payload.model, endpoint: payload.endpoint};
+      document.querySelector("#api-key").value = "";
+      state.busy = true;
+      try {
+        const result = await request("/api/provider-models", payload);
+        state.providerModels = result.models;
+        show(result.models.length + " provider models loaded. Choose a model in Model ID.");
+      } catch (error) { show(error.message, true); }
+      finally {
+        const enteredKey = payload.apiKey;
+        payload.apiKey = "";
+        state.busy = false;
+        render();
+        document.querySelector("#api-key").value = enteredKey;
+      }
+      break;
+    }
     case "new-connection":
+      state.providerModels = [];
       state.connectionDraft = {};
       show();
       break;
     case "edit-connection": {
       const id = event.target.closest("[data-id]").dataset.id;
+      state.providerModels = [];
       state.connectionDraft = {...state.profiles.find(item => item.id === id)};
       show();
       document.querySelector("#connection-label").focus();
