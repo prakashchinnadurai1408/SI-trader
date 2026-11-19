@@ -1,0 +1,13 @@
+{
+  "8962fb0b133f": {
+    "username": "demo_admin",
+    "role": "admin",
+    "email": "demo@trader.com",
+    "phone": "9820065335",
+    "is_active": true,
+    "last_login": "",
+    "login_attempts": 0,
+    "created_at": "2026-11-19T21:06:57.279302",
+    "last_activity": "2026-11-19T21:06:57.279304"
+  }
+}

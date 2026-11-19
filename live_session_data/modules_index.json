@@ -1,0 +1,18 @@
+{
+  "modules": {
+    "curriculum:phase2_demo": {
+      "id": "curriculum:phase2_demo",
+      "title": "Phase 2 Demo",
+      "description": "Phase 2 feature demonstration",
+      "trainer_id": "admin",
+      "session_type": "curriculum_live",
+      "max_participants": 100,
+      "scheduled_at": "2026-11-19T21:07:53.277180",
+      "enrolled_participants": 0,
+      "status": "scheduled",
+      "duration_minutes": 45,
+      "resources": [],
+      "notes": ""
+    }
+  }
+}

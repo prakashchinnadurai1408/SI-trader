@@ -1,0 +1,29 @@
+{
+  "sessions": {
+    "3fe4115a0a23": {
+      "id": "3fe4115a0a23",
+      "curriculum_module_id": "curriculum:phase2_demo",
+      "title": "Phase 2 Demo",
+      "description": "Phase 2 feature demonstration",
+      "trainer_id": "admin",
+      "session_type": "curriculum_live",
+      "max_participants": 100,
+      "enrolled_participants": 0,
+      "scheduled_at": "2026-11-19T21:07:39.077338",
+      "status": "scheduled"
+    },
+    "71ef2ac064b5": {
+      "id": "71ef2ac064b5",
+      "curriculum_module_id": "curriculum:phase2_demo",
+      "title": "Phase 2 Demo",
+      "description": "Phase 2 feature demonstration",
+      "trainer_id": "admin",
+      "session_type": "curriculum_live",
+      "max_participants": 100,
+      "enrolled_participants": 0,
+      "scheduled_at": "2026-11-19T21:07:53.277180",
+      "status": "scheduled"
+    }
+  },
+  "modules": {}
+}

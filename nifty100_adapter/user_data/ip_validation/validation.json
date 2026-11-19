@@ -1,0 +1,37 @@
+{
+  "zerodha": {
+    "status": "validated",
+    "registered_ip": "1.2.3.4",
+    "current_ip": "1.2.3.4",
+    "last_checked": "2026-11-19T22:14:11.684771",
+    "days_until_rotation": null
+  },
+  "hdfc": {
+    "status": "changed",
+    "registered_ip": "5.6.7.8",
+    "current_ip": "5.6.7.9",
+    "last_checked": "2026-11-19T22:14:11.712866",
+    "days_until_rotation": null
+  },
+  "angel_one": {
+    "status": "validated",
+    "registered_ip": "10.11.12.13",
+    "current_ip": "10.11.12.13",
+    "last_checked": "2026-11-19T22:14:11.731673",
+    "days_until_rotation": null
+  },
+  "upstox": {
+    "status": "changed",
+    "registered_ip": "14.15.16.17",
+    "current_ip": "14.15.16.18",
+    "last_checked": "2026-11-19T22:14:11.753553",
+    "days_until_rotation": null
+  },
+  "fyers": {
+    "status": "validated",
+    "registered_ip": "19.20.21.22",
+    "current_ip": "19.20.21.22",
+    "last_checked": "2026-11-19T22:14:11.772896",
+    "days_until_rotation": null
+  }
+}
