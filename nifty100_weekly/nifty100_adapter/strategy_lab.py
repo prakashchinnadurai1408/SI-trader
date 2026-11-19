@@ -1,6 +1,6 @@
 """AlphaDesk-inspired quantitative diagnostics on SI-Trader research data."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import re
 from pathlib import Path
@@ -94,8 +94,11 @@ def run_comparison(payload):
     if any(not isinstance(month, str) or not re.fullmatch(r"[1-9][0-9]{3}-(0[1-9]|1[0-2])", month)
            for month in (start, end)):
         raise ValueError("Choose a first and last holdout month.")
-    if start > end or end >= datetime.now(MARKET_TIME).strftime("%Y-%m"):
-        raise ValueError("Choose an ordered holdout ending in a completed month.")
+    last_complete = (datetime.now(MARKET_TIME).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    if start > last_complete or end > last_complete:
+        raise ValueError(f"Historical backtests can end through {last_complete}. Current and future months are incomplete.")
+    if start > end:
+        raise ValueError("First holdout month must be on or before the last holdout month.")
     if type(capital) not in (int, float) or not 1 <= capital <= 1_000_000_000:
         raise ValueError("Enter starting capital between INR 1 and INR 1 billion.")
     run_test = payload.get("run")

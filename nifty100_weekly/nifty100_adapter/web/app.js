@@ -580,6 +580,41 @@ function committeeView() {
   </section>`;
 }
 
+function lastCompletedMonth() {
+  const parts = new Intl.DateTimeFormat("en", {timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit"}).formatToParts(new Date());
+  let year = Number(parts.find(item => item.type === "year").value);
+  let month = Number(parts.find(item => item.type === "month").value) - 1;
+  if (month === 0) { year -= 1; month = 12; }
+  return year + "-" + String(month).padStart(2, "0");
+}
+
+function monthlyDateError(start, end) {
+  const last = lastCompletedMonth();
+  if (start > last || end > last) return "Historical backtests can end through " + last + ". Current and future months are incomplete.";
+  if (start && end && start > end) return "First holdout month must be on or before the last holdout month.";
+  return "";
+}
+
+function validateMonthlyDates() {
+  const form = document.querySelector("#monthly-comparison");
+  if (!form) return true;
+  const start = form.elements.start;
+  const end = form.elements.end;
+  const error = monthlyDateError(start.value, end.value);
+  start.setCustomValidity(error);
+  end.setCustomValidity(error);
+  document.querySelector("#monthly-date-validation").textContent = error;
+  return !error;
+}
+
+async function generateMonthlyProposal() {
+  const objective = state.researchObjective.trim() || "Test a monthly Nifty 100 quality, momentum and low-volatility factor strategy.";
+  state.researchProposal = await request("/api/strategy-builder", {model: config.model, objective});
+  state.monthlyInputs.includeAI = true;
+  state.preferParameterPreview = false;
+  state.parameterReportMessage = "";
+}
+
 function monthlyComparison() {
   const inputs = state.monthlyInputs;
   const result = state.monthlyResult;
@@ -610,9 +645,11 @@ function monthlyComparison() {
     <p class="desk-copy note"><a href="https://github.com/prakashchinnadurai1408/SI-trader/blob/si-trader-app/nifty100_weekly/MONTHLY_BACKTEST.md#historical-data-intake" target="_blank" rel="noopener noreferrer">Set up the historical data bundle</a></p>
     <form id="monthly-comparison" class="desk-copy">
       <label for="monthly-start">First holdout month</label>
-      <input id="monthly-start" name="start" type="month" required value="${escapeHtml(inputs.start)}">
+      <input id="monthly-start" name="start" type="month" required max="${lastCompletedMonth()}" aria-describedby="monthly-date-help monthly-date-validation" value="${escapeHtml(inputs.start)}">
       <label for="monthly-end">Last holdout month</label>
-      <input id="monthly-end" name="end" type="month" required value="${escapeHtml(inputs.end)}">
+      <input id="monthly-end" name="end" type="month" required max="${lastCompletedMonth()}" aria-describedby="monthly-date-help monthly-date-validation" value="${escapeHtml(inputs.end)}">
+      <p id="monthly-date-help" class="note">Latest completed month · ${lastCompletedMonth()} (India time). Choose a historical period that was reserved for testing.</p>
+      <p id="monthly-date-validation" class="message error" role="status">${escapeHtml(monthlyDateError(inputs.start, inputs.end))}</p>
       <label for="monthly-capital">Starting capital (INR)</label>
       <input id="monthly-capital" name="capital" type="number" min="1" max="1000000000" required value="${escapeHtml(inputs.capital)}">
       <label for="monthly-bundle">Archived bundle fingerprint (optional)</label>
@@ -620,9 +657,11 @@ function monthlyComparison() {
       <p class="note">Leave blank to use the configured research bundle.</p>
       <label class="check"><input type="checkbox" name="testPriceInputs" ${inputs.testPriceInputs ? "checked" : ""}>
         Test sector momentum, downside risk, and trade capacity separately</label>
-      <label class="check"><input type="checkbox" name="includeAI" ${state.researchProposal && inputs.includeAI ? "checked" : ""}
-        ${state.researchProposal ? "" : "disabled"}> Include the current AI factor challenger</label>
-      ${state.researchProposal ? "" : '<p class="note">Generate a monthly proposal above to include it here.</p>'}
+      <label class="check"><input type="checkbox" name="includeAI" ${inputs.includeAI ? "checked" : ""}>
+        Include an AI factor challenger</label>
+      <p class="note">${state.researchProposal ? "The current proposal will be included when selected." :
+        "When selected, Run monthly comparison checks the data, generates an AI proposal, and includes it in the test."}</p>
+      ${!config.model ? '<div class="actions"><button type="button" class="secondary" data-action="llm-config">Configure LLM for AI comparison</button></div>' : ""}
       ${state.monthlyFeedback ? `<p class="message ${state.monthlyError ? "error" : ""}" role="${state.monthlyError ? "alert" : "status"}">${escapeHtml(state.monthlyFeedback)}</p>` : ""}
       <div class="actions">
         <button class="secondary" value="check" ${state.busy ? "disabled" : ""}>Check data readiness</button>
@@ -878,6 +917,7 @@ app.addEventListener("input", event => {
   if (event.target.form?.id === "monthly-comparison") {
     const field = event.target.name;
     state.monthlyInputs[field] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+    if (field === "start" || field === "end") validateMonthlyDates();
   }
 });
 
@@ -921,17 +961,34 @@ app.addEventListener("submit", async event => {
     state.view = "broker";
     show();
   } else if (event.target.id === "monthly-comparison" && !state.busy) {
+    if (!validateMonthlyDates()) { event.target.reportValidity(); return; }
     const run = event.submitter?.value === "run";
     state.monthlyInputs = {start: form.get("start"), end: form.get("end"), capital: Number(form.get("capital")),
       includeAI: form.has("includeAI"), testPriceInputs: form.has("testPriceInputs"), bundleId: form.get("bundleId").trim()};
+    const comparisonInputs = {...state.monthlyInputs};
     state.monthlyResult = null;
     state.busy = true;
     state.monthlyFeedback = run ? "Checking the dataset and running the monthly strategies." : "Checking historical data coverage.";
     state.monthlyError = false;
     show();
     try {
-      state.monthlyResult = await request("/api/monthly-comparison", {...state.monthlyInputs, run,
-        challenger: state.monthlyInputs.includeAI ? {
+      if (run && comparisonInputs.includeAI && !config.model) {
+        throw new Error("Select and save a model in LLM Configuration to include an AI challenger.");
+      }
+      if (run && comparisonInputs.includeAI && !state.researchProposal) {
+        state.monthlyResult = await request("/api/monthly-comparison", {...comparisonInputs, run: false, challenger: null});
+        if (!state.monthlyResult.readiness.ready) {
+          state.monthlyFeedback = "";
+          return;
+        }
+        state.monthlyFeedback = "Data checks passed. Generating and reviewing the AI proposal.";
+        render();
+        await generateMonthlyProposal();
+        state.monthlyFeedback = "Comparing the AI proposal with the baseline on the same data and costs.";
+        render();
+      }
+      state.monthlyResult = await request("/api/monthly-comparison", {...comparisonInputs, run,
+        challenger: run && comparisonInputs.includeAI && state.researchProposal ? {
           kind: state.researchProposal.kind, schema_version: state.researchProposal.schema_version,
           weights: state.researchProposal.weights,
         } : null});
@@ -1019,11 +1076,7 @@ app.addEventListener("submit", async event => {
     state.researchProposal = null;
     show("Generating a proposal, then running the second-agent review.");
     try {
-      state.researchProposal = await request("/api/strategy-builder", {
-        model: config.model, objective: state.researchObjective,
-      });
-      state.preferParameterPreview = false;
-      state.parameterReportMessage = "";
+      await generateMonthlyProposal();
       show("Proposal ready. Include it in the historical backtest below or export it.");
     } catch (error) {
       show(error.message, true);
