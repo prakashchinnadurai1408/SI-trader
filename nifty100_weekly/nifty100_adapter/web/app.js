@@ -17,6 +17,7 @@ const state = {
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, testPriceInputs: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
+  providers: [], profiles: [], connectionDraft: {},
   models: [], modelDraft: "", modelTest: null, lab: null, labResult: null, labSymbol: "", labHorizon: 10, committee: null, committeeHoldings: "", evidence: null, fullCatalogue: null, watchlist: null, researchProposal: null, researchObjective: "", plan: null, tab: "home", snapshot: null, syncing: false, brokerError: "",
   view: "signin", busy: false,
   halted: sessionStorage.getItem("si-trader-halted") === "true",
@@ -144,6 +145,11 @@ function strategyConfig() {
   </main>`;
 }
 
+function modelLabel(id) {
+  const profile = state.profiles.find(item => "profile:" + item.id === id);
+  return profile ? profile.label + " · " + profile.model : id;
+}
+
 function llmConfig() {
   const tested = state.modelTest;
   const available = state.models.includes(state.modelDraft);
@@ -152,37 +158,71 @@ function llmConfig() {
     <h1>LLM Configuration</h1>
     <form class="card stack" id="llm-config">
       <section>
-        <h2>Local Ollama</h2>
-        <p>Connection endpoint <code>127.0.0.1:11434</code></p>
+        <h2>Active strategy model</h2>
+        <p>Use a saved cloud connection or a local Ollama model.</p>
         <p class="note">This model is shared by Weekly, Monthly and the research screens.</p>
-        <label for="llm-model">Installed model</label>
+        <label for="llm-model">Available models</label>
         <select id="llm-model" name="model" required ${state.busy || !state.models.length ? "disabled" : ""}>
           <option value="">Select a model</option>
-          ${state.models.map(model => `<option value="${escapeHtml(model)}" ${state.modelDraft === model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")}
+          ${state.models.map(model => `<option value="${escapeHtml(model)}" ${state.modelDraft === model ? "selected" : ""}>${escapeHtml(modelLabel(model))}</option>`).join("")}
         </select>
-        <p class="note">Saved model · ${escapeHtml(config.model || "None selected")}</p>
+        <p class="note">Saved model · ${escapeHtml(modelLabel(config.model) || "None selected")}</p>
       </section>
       <div class="actions">
-        <button type="button" class="secondary" data-action="models" ${state.busy ? "disabled" : ""}>Refresh installed models</button>
+        <button type="button" class="secondary" data-action="models" ${state.busy ? "disabled" : ""}>Refresh connections</button>
         <button class="secondary" value="test" ${state.busy || !available ? "disabled" : ""}>Test model</button>
         <button value="save" ${state.busy || !available ? "disabled" : ""}>Save model</button>
       </div>
       ${tested?.model === state.modelDraft ? `<p class="note">Last response time · ${count((tested.elapsedMs / 1000).toFixed(1))} seconds</p>` : ""}
+      <p class="note">Local Ollama connects at 127.0.0.1:11434 and uses models installed on this machine.</p>
       ${feedback()}
     </form>
+    <form class="card stack" id="cloud-connection">
+      <h2>${state.connectionDraft.id ? "Edit connection" : "Add model connection"}</h2>
+      <p class="note">A test sends a short prompt. Cloud strategy runs send research evidence to the selected provider. API keys are encrypted for your Windows user on this machine.</p>
+      <label for="provider">Provider</label>
+      <select id="provider" name="provider" required ${state.busy ? "disabled" : ""}>
+        ${state.providers.map(item => `<option value="${escapeHtml(item.id)}" ${(state.connectionDraft.provider || "claude") === item.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
+      </select>
+      <label for="connection-label">Connection name</label>
+      <input id="connection-label" name="label" maxlength="80" required value="${escapeHtml(state.connectionDraft.label || "")}" placeholder="My research model">
+      <label for="connection-model">Model ID</label>
+      <input id="connection-model" name="model" maxlength="160" required value="${escapeHtml(state.connectionDraft.model || "")}" placeholder="Exact model ID from your provider">
+      <label for="connection-endpoint">API base URL</label>
+      <input id="connection-endpoint" name="endpoint" type="url" required value="${escapeHtml(state.connectionDraft.endpoint || state.providers.find(item => item.id === (state.connectionDraft.provider || "claude"))?.endpoint || "")}">
+      <label for="api-key">API key</label>
+      <input id="api-key" name="apiKey" type="password" autocomplete="off" maxlength="8192" ${state.connectionDraft.hasKey ? "" : "required"} placeholder="${state.connectionDraft.hasKey ? "Leave blank to retain the saved key" : "Enter provider API key"}">
+      <div class="actions">
+        <button ${state.busy ? "disabled" : ""}>Save connection</button>
+        ${state.connectionDraft.id ? '<button type="button" class="secondary" data-action="new-connection">Add another connection</button>' : ""}
+      </div>
+    </form>
+    <section class="card stack">
+      <h2>Saved connections</h2>
+      ${state.profiles.length ? gridTable(["Connection", "Provider", "Model", "Key", "Actions"], state.profiles.map(item => [
+        escapeHtml(item.label), escapeHtml(state.providers.find(p => p.id === item.provider)?.label || item.provider),
+        escapeHtml(item.model), item.hasKey ? "Saved and encrypted" : "Key missing",
+        `<div class="actions"><button class="secondary" data-action="edit-connection" data-id="${escapeHtml(item.id)}">Edit</button>
+        <button class="secondary" data-action="test-connection" data-id="${escapeHtml(item.id)}" ${state.busy || !item.hasKey ? "disabled" : ""}>Test</button>
+        <button class="secondary" data-action="delete-key" data-id="${escapeHtml(item.id)}" ${state.busy || !item.hasKey ? "disabled" : ""}>Delete key</button>
+        <button class="secondary" data-action="delete-connection" data-id="${escapeHtml(item.id)}" ${state.busy ? "disabled" : ""}>Delete connection</button></div>`,
+      ]), "") : '<p class="note">Save a cloud connection above. Ollama models appear in the available models list.</p>'}
+    </section>
   </main>`;
 }
 
 async function loadModels() {
   state.busy = true;
-  show("Checking Ollama…");
+  show("Loading model connections.");
   try {
     const result = await request("/api/models");
     state.models = result.models;
+    state.profiles = result.profiles;
+    state.providers = result.providers;
     if (!state.models.includes(state.modelDraft)) {
       state.modelDraft = state.models.includes(config.model) ? config.model : "";
     }
-    show(state.models.length ? "Ollama is connected." : "Ollama is connected. Install a model to generate a strategy.", !state.models.length);
+    show(result.error || (state.models.length ? "Model connections loaded." : "Add a cloud connection or start Ollama to choose a model."), Boolean(result.error));
   } catch (error) {
     state.models = [];
     show(error.message, true);
@@ -252,7 +292,7 @@ function home() {
     <section class="card">
       <h2>Weekly strategy</h2>
       <p>Generate a cash-sized Nifty 100 basket and review the simulated fills.</p>
-      <p class="note">${config.model ? "Model selected · " + escapeHtml(config.model) : "Setup required · Select an Ollama model"}</p>
+      <p class="note">${config.model ? "Model selected · " + escapeHtml(modelLabel(config.model)) : "Setup required · Select an Ollama model"}</p>
       <button data-action="tab" data-tab="weekly">Open weekly strategy</button>
     </section>
     <section class="card">
@@ -326,9 +366,9 @@ function weekly() {
       ${metric("Simulated fills", run ? fills : "—", run ? "Reference close • " + tradeTime(run.asOf) : "Appears after a paper run")}
     </div>
     <section class="card desk-run">
-      <div><h2>Weekly AI strategy</h2><p>${config.model ? escapeHtml(config.model) + " · " + escapeHtml(source) + " · " + (config.execution.paperAuto ? "Automatic paper fills" : "Preview only") : "Choose a model to run a paper strategy."}</p></div>
+      <div><h2>Weekly AI strategy</h2><p>${config.model ? escapeHtml(modelLabel(config.model)) + " · " + escapeHtml(source) + " · " + (config.execution.paperAuto ? "Automatic paper fills" : "Preview only") : "Choose a model to run a paper strategy."}</p></div>
       <form id="strategy"><button ${state.busy || state.halted || !config.model ? "disabled" : ""}>${state.busy ? "Running strategy…" : "Run weekly strategy"}</button></form>
-      ${!config.model ? '<div class="actions"><button class="secondary" data-action="llm-config">Set up Ollama model</button></div>' : ""}
+      ${!config.model ? '<div class="actions"><button class="secondary" data-action="llm-config">Configure LLM</button></div>' : ""}
       ${state.halted ? '<p role="status">Weekly paper runs are paused. Select Reset kill switch to continue.</p>' : ""}
       ${plan ? `<p class="note">Maximum paper exposure after market dials · ${count(plan.maximumPaperExposurePct)}%</p>` : ""}
       ${feedback()}
@@ -385,8 +425,8 @@ function builder() {
       <div class="actions"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Research agents working…" : "Generate monthly proposal"}</button>
       ${plan ? '<button type="button" class="secondary" data-action="export-research">Export proposal</button>' : ""}</div>
     </form>
-    <p class="note">${config.model ? "Model: " + escapeHtml(config.model) : "Select an installed model to generate a proposal."}</p>
-    ${!config.model ? '<button class="secondary" data-action="llm-config">Set up Ollama model</button>' : ""}
+    <p class="note">${config.model ? "Model: " + escapeHtml(modelLabel(config.model)) : "Select a model to generate a proposal."}</p>
+    ${!config.model ? '<button class="secondary" data-action="llm-config">Configure LLM</button>' : ""}
     ${feedback()}
     ${plan ? `<div class="builder-result">
       <h2>Test hypothesis</h2><p>${escapeHtml(plan.hypothesis)}</p>
@@ -408,7 +448,7 @@ function watchlistView() {
     <div class="desk-card-header"><h2>Top 10 Nifty 100 watchlist</h2><span class="desk-tag">Research only</span></div>
     <p>All 48 parameters are listed. The LLM weights only the inputs approved for this research ranking. See Data feeds for additional evidence.</p>
     <form id="watchlist"><button ${state.busy || !config.model ? "disabled" : ""}>${state.busy ? "Refreshing NSE and ranking…" : "Build Top 10 watchlist"}</button></form>
-    ${!config.model ? "<p class='note'>Choose an Ollama model in LLM Configuration.</p>" : ""}
+    ${!config.model ? "<p class='note'>Choose a model in LLM Configuration.</p>" : ""}
     ${feedback()}
     ${watch ? `<div class="builder-result">
       <p>NSE close ${escapeHtml(watch.market.asOf)} · ${watch.market.covered}/${watch.market.universeSize} covered ·
@@ -463,7 +503,7 @@ function fullCatalogueView() {
       <button data-action="full-catalogue" ${state.busy || !result?.ready || !config.model ? "disabled" : ""}>Run full AI screen</button>
     </div>
     <div class="desk-copy">${feedback()}</div>
-    ${!config.model ? '<p class="desk-copy note">Select an Ollama model in LLM Configuration to run a complete screen.</p>' : ""}
+    ${!config.model ? '<p class="desk-copy note">Select a model in LLM Configuration to run a complete screen.</p>' : ""}
     ${result ? `<p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
       ${result.errors.map(error => `<p class="desk-copy error" role="alert">${escapeHtml(error)}</p>`).join("")}
       ${!result.providerConfigured ? '<p class="desk-copy note">No additional evidence source is configured.</p>' : ""}
@@ -839,6 +879,12 @@ app.addEventListener("input", event => {
 });
 
 app.addEventListener("change", event => {
+  if (event.target.id === "provider") {
+    state.connectionDraft = {...state.connectionDraft, provider: event.target.value, hasKey: false,
+      label: document.querySelector("#connection-label").value, model: document.querySelector("#connection-model").value,
+      endpoint: state.providers.find(item => item.id === event.target.value)?.endpoint || ""};
+    render();
+  }
   if (event.target.id === "llm-model") {
     state.modelDraft = event.target.value;
     show();
@@ -978,6 +1024,27 @@ app.addEventListener("submit", async event => {
     } catch (error) {
       show(error.message, true);
     } finally {
+      state.busy = false;
+      render();
+    }
+  } else if (event.target.id === "cloud-connection" && !state.busy) {
+    const payload = Object.fromEntries(form);
+    state.connectionDraft = {...state.connectionDraft, provider: payload.provider,
+      label: payload.label, model: payload.model, endpoint: payload.endpoint};
+    if (state.connectionDraft.id) payload.id = state.connectionDraft.id;
+    document.querySelector("#api-key").value = "";
+    state.busy = true;
+    try {
+      const saved = await request("/api/llm-save", payload);
+      payload.apiKey = "";
+      state.connectionDraft = {};
+      state.modelDraft = "profile:" + saved.id;
+      await loadModels();
+      show("Connection saved. Select Test model to verify access, then Save model to use it for strategies.");
+    } catch (error) {
+      show(error.message, true);
+    } finally {
+      payload.apiKey = "";
       state.busy = false;
       render();
     }
@@ -1135,6 +1202,49 @@ app.addEventListener("click", async event => {
     case "models":
       await loadModels();
       break;
+    case "new-connection":
+      state.connectionDraft = {};
+      show();
+      break;
+    case "edit-connection": {
+      const id = event.target.closest("[data-id]").dataset.id;
+      state.connectionDraft = {...state.profiles.find(item => item.id === id)};
+      show();
+      document.querySelector("#connection-label").focus();
+      break;
+    }
+    case "test-connection": {
+      if (state.busy) break;
+      const id = event.target.closest("[data-id]").dataset.id;
+      state.busy = true;
+      show("Testing provider response.");
+      try {
+        state.modelTest = await request("/api/model-test", {model: "profile:" + id});
+        state.modelDraft = "profile:" + id;
+        show("Model responded successfully.");
+      } catch (error) { show(error.message, true); }
+      finally { state.busy = false; render(); }
+      break;
+    }
+    case "delete-key":
+    case "delete-connection": {
+      if (state.busy) break;
+      const id = event.target.closest("[data-id]").dataset.id;
+      state.busy = true;
+      try {
+        await request(action === "delete-key" ? "/api/llm-delete-key" : "/api/llm-delete", {id});
+        if (config.model === "profile:" + id) {
+          config = {...config, model: ""};
+          localStorage.setItem("si-trader-strategy-config", JSON.stringify(config));
+        }
+        if (state.connectionDraft.id === id) state.connectionDraft = {};
+        state.modelTest = null;
+        await loadModels();
+        show(action === "delete-key" ? "Saved key deleted from this machine. You can add a replacement using Edit." : "Model connection deleted.");
+      } catch (error) { show(error.message, true); }
+      finally { state.busy = false; render(); }
+      break;
+    }
     case "dashboard":
       state.view = "dashboard";
       show();

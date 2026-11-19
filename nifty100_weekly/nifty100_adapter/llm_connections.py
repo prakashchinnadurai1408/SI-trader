@@ -1,0 +1,182 @@
+"""Saved model connections and encrypted API keys for the local dashboard."""
+import ctypes
+from contextlib import contextmanager
+from ctypes import wintypes
+import json
+import os
+from pathlib import Path
+import sqlite3
+import re
+import http.client
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import uuid4
+
+PROVIDERS = {
+    "claude": ("Claude", "https://api.anthropic.com/v1", "anthropic"),
+    "openai": ("OpenAI", "https://api.openai.com/v1", "openai"),
+    "gemini": ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "openai"),
+    "grok": ("Grok", "https://api.x.ai/v1", "openai"),
+    "deepseek": ("DeepSeek", "https://api.deepseek.com", "openai"),
+    "nvidia": ("NVIDIA", "https://integrate.api.nvidia.com/v1", "openai"),
+    "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1", "openai"),
+    "qwen": ("Qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "openai"),
+    "kimi": ("Kimi", "https://api.moonshot.ai/v1", "openai"),
+    "custom": ("Custom OpenAI-compatible", "", "openai"),
+}
+
+class Blob(ctypes.Structure):
+    _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def protect(value, decrypt=False):
+    if os.name != "nt":
+        raise ValueError("Saved API keys currently require Windows encrypted storage.")
+    buffer = ctypes.create_string_buffer(value)
+    source = Blob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    result = Blob()
+    function = ctypes.windll.crypt32.CryptUnprotectData if decrypt else ctypes.windll.crypt32.CryptProtectData
+    function.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                         ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+    function.restype = wintypes.BOOL
+    if not function(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(result)):
+        raise ValueError("Windows could not access this API key. Save it again under the current user.")
+    try:
+        return ctypes.string_at(result.data, result.size)
+    finally:
+        release = ctypes.windll.kernel32.LocalFree
+        release.argtypes = [ctypes.c_void_p]
+        release.restype = ctypes.c_void_p
+        release(result.data)
+
+
+@contextmanager
+def connection():
+    folder = Path(os.environ.get("SI_TRADER_LLM_HOME", str(Path.home() / ".si-trader")))
+    folder.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(folder / "llm.sqlite", timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA secure_delete=ON")
+    conn.execute("""CREATE TABLE IF NOT EXISTS profiles
+        (id TEXT PRIMARY KEY, provider TEXT, label TEXT, model TEXT, endpoint TEXT, secret BLOB)""")
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def profiles():
+    with connection() as conn:
+        return [dict(id=row["id"], provider=row["provider"], label=row["label"], model=row["model"],
+                     endpoint=row["endpoint"], hasKey=bool(row["secret"])) for row in conn.execute("SELECT * FROM profiles ORDER BY label, id")]
+
+
+def validate_endpoint(value):
+    if len(value) > 2048 or any(ord(char) <= 32 for char in value):
+        raise ValueError("Enter a valid HTTPS API base URL.")
+    url = urlsplit(value)
+    if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError("Use an HTTPS API base URL without credentials, query or fragment.")
+    return value.rstrip("/")
+
+
+def save_profile(payload):
+    provider = payload.get("provider")
+    if not isinstance(provider, str) or provider not in PROVIDERS:
+        raise ValueError("Choose a supported provider.")
+    label, model = payload.get("label"), payload.get("model")
+    if any(not isinstance(v, str) or not 1 <= len(v.strip()) <= cap for v, cap in ((label, 80), (model, 160))):
+        raise ValueError("Enter a connection name and exact model ID.")
+    endpoint = payload.get("endpoint") or PROVIDERS[provider][1]
+    if not isinstance(endpoint, str):
+        raise ValueError("Enter an API base URL.")
+    endpoint = validate_endpoint(endpoint)
+    secret = payload.get("apiKey", "")
+    if not isinstance(secret, str) or len(secret) > 8192 or any(ord(c) < 32 for c in secret):
+        raise ValueError("Enter a valid API key.")
+    identifier = payload.get("id") or uuid4().hex
+    if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+        raise ValueError("Choose a valid saved connection.")
+    if secret and not secret.strip():
+        raise ValueError("Enter a valid API key.")
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        old = conn.execute("SELECT * FROM profiles WHERE id=?", (identifier,)).fetchone()
+        if payload.get("id") and old is None:
+            raise ValueError("The connection no longer exists.")
+        if not secret and (old is None or not old["secret"] or old["endpoint"] != endpoint or old["provider"] != provider):
+            raise ValueError("Enter an API key for this provider and endpoint.")
+        encrypted = protect(secret.encode()) if secret else old["secret"]
+        conn.execute("INSERT OR REPLACE INTO profiles VALUES (?,?,?,?,?,?)",
+                     (identifier, provider, label.strip(), model.strip(), endpoint, encrypted))
+    return {"id": identifier}
+
+
+def delete_profile(identifier, key_only=False):
+    if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+        raise ValueError("Choose a saved connection.")
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if key_only:
+            conn.execute("UPDATE profiles SET secret=NULL WHERE id=?", (identifier,))
+        else:
+            conn.execute("DELETE FROM profiles WHERE id=?", (identifier,))
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("The API redirected. Set its final API base URL before retrying.")
+
+
+def chat(identifier, payload):
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM profiles WHERE id=?", (identifier,)).fetchone()
+    if row is None or not row["secret"]:
+        raise ValueError("The model connection or its API key was deleted. Configure it again.")
+    key = protect(row["secret"], decrypt=True).decode()
+    messages = list(payload["messages"])
+    if any(message.get("images") for message in messages):
+        raise ValueError("Cloud connections currently support text research. Choose a local vision model for screenshot review.")
+    format_spec = payload.get("format")
+    if format_spec:
+        instruction = "Return only a valid JSON value."
+        if isinstance(format_spec, dict):
+            instruction += " Match this JSON Schema: " + json.dumps(format_spec)
+        messages = [{"role": "system", "content": instruction}, *messages]
+    options = payload.get("options", {})
+    headers = {"Content-Type": "application/json"}
+    if PROVIDERS[row["provider"]][2] == "anthropic":
+        headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+        body = {"model": row["model"], "max_tokens": max(128, options.get("num_predict", 900)),
+                "system": "\n".join(m["content"] for m in messages if m["role"] == "system"),
+                "messages": [m for m in messages if m["role"] != "system"]}
+        suffix = "/messages"
+    else:
+        headers["Authorization"] = "Bearer " + key
+        body = {"model": row["model"], "messages": messages, "stream": False,
+                "max_tokens": max(128, options.get("num_predict", 900))}
+        if row["provider"] == "openai":
+            body["max_completion_tokens"] = body.pop("max_tokens")
+        suffix = "/chat/completions"
+    request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=180) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError("Provider response exceeded the supported size.")
+        data = json.loads(raw)
+        if suffix == "/messages":
+            content = "".join(item["text"] for item in data["content"] if item["type"] == "text")
+        else:
+            content = data["choices"][0]["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("The selected model returned no text.")
+        return {"message": {"content": content}}
+    except HTTPError as error:
+        raise ValueError(f"Provider returned HTTP {error.code}. Check the key, model access, quota and API endpoint.") from None
+    except (URLError, OSError, http.client.HTTPException):
+        raise ValueError("Could not reach the provider in time. Check the connection and retry.") from None
+    except (KeyError, TypeError, json.JSONDecodeError):
+        raise ValueError("Provider returned an unsupported response format.") from None

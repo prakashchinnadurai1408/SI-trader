@@ -1,12 +1,18 @@
-"""Generate a paper strategy with a local Ollama model."""
+"""Generate validated paper research with a configured local or cloud model."""
 
 import http.client
 import json
 import math
 from time import perf_counter
 
+from .llm_connections import chat, profiles
+
 
 def ollama(path, payload=None):
+    if payload and isinstance(payload.get("model"), str) and payload["model"].startswith("profile:"):
+        if path != "/api/chat":
+            raise ValueError("Cloud connections support chat requests.")
+        return chat(payload["model"][8:], payload)
     connection = http.client.HTTPConnection("127.0.0.1", 11434, timeout=180)
     try:
         method = "GET" if payload is None else "POST"
@@ -23,7 +29,14 @@ def ollama(path, payload=None):
 
 
 def installed_models():
-    return [entry["name"] for entry in ollama("/api/tags")["models"]]
+    saved = ["profile:" + row["id"] for row in profiles() if row["hasKey"]]
+    try:
+        local = [entry["name"] for entry in ollama("/api/tags")["models"]]
+    except ValueError:
+        if not saved:
+            raise
+        local = []
+    return local + saved
 
 
 def test_model(model):

@@ -13,7 +13,7 @@ npm run start
 
 To launch directly with Python, run `python -X utf8 -m nifty100_weekly.nifty100_adapter.web_app`.
 
-Open http://127.0.0.1:8765. The local sign-in screen shows the demo credentials. Open **LLM Configuration** to select, test, and save a local Ollama model for AI research. **Data feeds** and its **Refresh data feeds** action work without a model.
+Open http://127.0.0.1:8765. The local sign-in screen shows the demo credentials. Open **LLM Configuration** to add, test, and select local Ollama models or cloud connections for AI research. See the [model setup guide](nifty100_weekly/USER_JOURNEY.md#add-and-manage-cloud-models) for providers and API key management. **Data feeds** and its **Refresh data feeds** action work without a model.
 
 The service binds to loopback. The browser sign-in is a demo. Do not expose this deployment to the public internet. InvestRight account views require INVESTRIGHT_API_KEY and INVESTRIGHT_ACCESS_TOKEN in the server environment. They are read-only. Keep account credentials and local evidence files outside Git.
 

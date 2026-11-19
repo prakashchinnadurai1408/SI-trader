@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
+from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile
 from .ai_strategy import generate_plan, installed_models, test_model
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
@@ -76,14 +77,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/strategy-lab":
                 self.send_json(200, pulse())
             elif self.path == "/api/models":
-                self.send_json(200, {"models": installed_models()})
-            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay", "/api/model-test"):
+                try:
+                    models, error = installed_models(), ""
+                except ValueError as exc:
+                    models, error = [], str(exc)
+                self.send_json(200, {"models": models, "profiles": profiles(), "error": error,
+                                     "providers": [{"id": key, "label": value[0], "endpoint": value[1]} for key, value in PROVIDERS.items()]})
+            elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay", "/api/model-test", "/api/llm-save", "/api/llm-delete", "/api/llm-delete-key"):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 32_768:
                     raise ValueError("Provide a valid strategy configuration.")
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("Provide a strategy configuration.")
+                if self.path == "/api/llm-save":
+                    self.send_json(200, save_profile(payload))
+                    return
+                if self.path in ("/api/llm-delete", "/api/llm-delete-key"):
+                    delete_profile(payload.get("id"), key_only=self.path == "/api/llm-delete-key")
+                    self.send_json(200, {"deleted": True})
+                    return
                 if self.path == "/api/research-replay":
                     self.send_json(200, run_replay(payload))
                     return
@@ -99,7 +112,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 model = payload.get("model")
                 if self.path == "/api/model-test":
                     if not isinstance(model, str) or model not in installed_models():
-                        raise ValueError("Choose an installed Ollama model.")
+                        raise ValueError("Choose an available model in LLM Configuration.")
                     self.send_json(200, test_model(model))
                     return
                 objective = payload.get("objective")
@@ -107,7 +120,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if not isinstance(objective, str) or not 1 <= len(objective.strip()) <= 500:
                     raise ValueError("Enter a strategy objective of up to 500 characters.")
                 if not isinstance(model, str) or model not in installed_models():
-                    raise ValueError("Choose an installed Ollama model in LLM configuration.")
+                    raise ValueError("Choose an available model in LLM Configuration.")
                 if self.path == "/api/research-committee":
                     holdings = held_symbols(payload.get("holdings", []))
                     self.send_json(200, build_committee(model, objective.strip(), holdings))
