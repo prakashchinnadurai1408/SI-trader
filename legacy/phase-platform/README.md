@@ -2,6 +2,8 @@
 
 This directory preserves the source and documentation from the `master` upload at commit `cc698c697712ff7a9791cf25c0325d3e595d9aae`. The `main` merge also retains that commit as a parent, alongside the maintained application history.
 
+The subsequent Phase 2 upload at `5fb9451` is merged into this same source layout. Its 18 updated or added files include budget management, stop/target handling, kill switches, daily checklists, execution pipelines, strategy and data adapters, and optional backtesting adapters. These additions are preserved as prototype source; they have not been connected to the maintained UI or approved for live execution. The conflicting root package locations were resolved into this directory, and the maintained application's configuration imports were retained.
+
 The runnable application is at the repository root under `nifty100_weekly/`. Launch it with `npm run start` from the repository root. This archive is not loaded by that application and is not an additional deployment.
 
 ## Integration decisions
