@@ -4,6 +4,8 @@ This directory preserves the source and documentation from the `master` upload a
 
 The subsequent Phase 2 upload at `5fb9451` is merged into this same source layout. Its 18 updated or added files include budget management, stop/target handling, kill switches, daily checklists, execution pipelines, strategy and data adapters, and optional backtesting adapters. These additions are preserved as prototype source; they have not been connected to the maintained UI or approved for live execution. The conflicting root package locations were resolved into this directory, and the maintained application's configuration imports were retained.
 
+The data-source ecosystem upload at `c1ec847` is also merged here. Its ten source updates cover the parameter configuration, source catalogue, validation, pipeline orchestration, and price, fundamentals, news/sentiment, regulatory, and shareholding adapters. Folder-location conflicts were resolved into this existing prototype tree. These modules are not wired into the maintained application's feeds or UI; their presence does not establish live coverage of all 48 parameters. Syntax checks passed for the ten incoming files; provider access and end-to-end collection remain unverified.
+
 The runnable application is at the repository root under `nifty100_weekly/`. Launch it with `npm run start` from the repository root. This archive is not loaded by that application and is not an additional deployment.
 
 ## Integration decisions

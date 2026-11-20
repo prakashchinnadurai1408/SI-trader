@@ -11,7 +11,6 @@ from .parameter_catalogue import (
     validate_weight_total,
     RoleType,
     ParameterDefinition,
-    ADDITIONAL_PARAMETERS,
 )
 
 __all__ = [
@@ -23,5 +22,4 @@ __all__ = [
     "validate_weight_total",
     "RoleType",
     "ParameterDefinition",
-    "ADDITIONAL_PARAMETERS",
 ]
