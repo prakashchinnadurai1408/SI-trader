@@ -2,6 +2,15 @@
 
 A local research and paper-trading workspace for Nifty 100. It includes an NSE watchlist, a 48-parameter feed coverage screen, Ollama strategy research, and a monthly backtest and paper pilot.
 
+## Repository and source layout
+
+The maintained repository is [prakashchinnadurai1408/SI-trader](https://github.com/prakashchinnadurai1408/SI-trader), on **main**. Both trading source histories are consolidated here.
+
+- `nifty100_weekly/` contains the current application launched by `npm run start`.
+- `legacy/phase-platform/` preserves the earlier phase-platform source from `master` for review and selective migration. It is not imported by the current application. See its [integration status](legacy/phase-platform/README.md).
+
+The former `si-trader-app` and `master` branches are retained for compatibility and history. Start new development from `main`.
+
 ## Run locally
 
 Use Python 3.12 or newer and run from the checkout root. The npm command also requires Node.js.
