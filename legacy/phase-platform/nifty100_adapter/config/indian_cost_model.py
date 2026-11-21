@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Dict, Optional
+
 """Indian Cost & Tax Model for SI-Trader.
 
 Implements BRD Section 14 cost model:
@@ -118,7 +122,3 @@ __all__ = [
     "IndianCostModel",
     "get_cost_model",
 ]
-
-
-# Optional typing import for type hints
-from typing import Optional, Dict
