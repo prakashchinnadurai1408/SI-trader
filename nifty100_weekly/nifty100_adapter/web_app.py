@@ -3,8 +3,10 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import re
 from pathlib import Path
+from .deployment import Runtime, Sessions
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
 from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models
@@ -29,25 +31,46 @@ FILES = {
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    def send_payload(self, status, content_type, payload):
+    def send_payload(self, status, content_type, payload, headers=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("X-Frame-Options", "DENY")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_json(self, status, result):
-        self.send_payload(status, "application/json", json.dumps(result).encode())
+    def send_json(self, status, result, headers=None):
+        self.send_payload(status, "application/json", json.dumps(result).encode(), headers)
 
     def local_request(self):
-        port = self.server.server_port
-        return self.headers.get("Host") == f"127.0.0.1:{port}"
+        return self.server.runtime.allowed_host(self.headers.get("Host"), self.server.server_port)
+
+    def authenticated(self):
+        return not self.server.runtime.hosted or self.server.sessions.authorized(self.headers.get("Cookie"))
+
+    def read_json(self):
+        size = int(self.headers.get("Content-Length", 0))
+        if not 0 < size <= 32_768:
+            raise ValueError("Provide a valid request body.")
+        payload = json.loads(self.rfile.read(size))
+        if not isinstance(payload, dict):
+            raise ValueError("Provide a JSON object.")
+        return payload
 
     def do_GET(self):
+        if self.path == "/healthz" and (self.local_request() or self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"):
+            self.send_json(200, {"status": "ok", "paper": True})
+            return
         if not self.local_request():
             self.send_error(403)
+            return
+        if self.path == "/api/auth/session":
+            self.send_json(200, {"hosted": self.server.runtime.hosted, "authenticated": self.authenticated()})
             return
         if self.path not in FILES:
             self.send_error(404)
@@ -56,11 +79,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_payload(200, content_type, (ASSETS / name).read_bytes())
 
     def do_POST(self):
-        origin = f"http://127.0.0.1:{self.server.server_port}"
-        if not self.local_request() or self.headers.get("Origin") != origin:
+        if not self.local_request() or not self.server.runtime.allowed_origin(self.headers.get("Origin"), self.server.server_port):
             self.send_error(403)
             return
         try:
+            # Consume bounded bodies before responding, including authentication failures.
+            payload = self.read_json() if self.headers.get("Content-Length", "0") != "0" else {}
+            if self.path == "/api/auth/login" and self.server.runtime.hosted:
+                token, status = self.server.sessions.login(payload.get("email"), payload.get("password"), self.server.runtime)
+                if token:
+                    self.send_json(200, {"authenticated": True}, {"Set-Cookie": self.server.sessions.cookie(token)})
+                else:
+                    self.send_json(status, {"error": "Too many attempts. Try again in 15 minutes." if status == 429 else "Invalid sign-in details."})
+                return
+            if not self.authenticated():
+                self.send_json(401, {"error": "Sign in to continue."})
+                return
+            if self.path == "/api/auth/logout":
+                self.server.sessions.logout(self.headers.get("Cookie"))
+                self.send_json(200, {"authenticated": False}, {"Set-Cookie": self.server.sessions.cookie("", clear=True)})
+                return
             if self.path == "/api/holdings":
                 self.send_json(200, {"count": holdings_count()})
             elif self.path == "/api/broker":
@@ -84,12 +122,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"models": models, "profiles": profiles(), "error": error,
                                      "providers": [{"id": key, "label": value[0], "endpoint": value[1]} for key, value in PROVIDERS.items()]})
             elif self.path in ("/api/parameters", "/api/strategy", "/api/strategy-builder", "/api/watchlist", "/api/full-catalogue", "/api/research-committee", "/api/quant-diagnostics", "/api/monthly-comparison", "/api/research-replay", "/api/model-test", "/api/llm-save", "/api/llm-delete", "/api/llm-delete-key", "/api/provider-models"):
-                size = int(self.headers.get("Content-Length", 0))
-                if not 0 < size <= 32_768:
-                    raise ValueError("Provide a valid strategy configuration.")
-                payload = json.loads(self.rfile.read(size))
-                if not isinstance(payload, dict):
-                    raise ValueError("Provide a strategy configuration.")
                 if self.path == "/api/provider-models":
                     self.send_json(200, provider_models(payload))
                     return
@@ -206,12 +238,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(error)})
 
 
+class DashboardServer(ThreadingHTTPServer):
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(30)
+        return connection, address
+
+
+def create_server(host="127.0.0.1", port=8765, runtime=None):
+    runtime = runtime or Runtime.environment()
+    if not runtime.hosted and host != "127.0.0.1":
+        raise ValueError("Non-loopback binding requires SI_TRADER_MODE=hosted.")
+    server = DashboardServer((host, port), DashboardHandler)
+    server.runtime = runtime
+    server.sessions = Sessions()
+    return server
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    parser.add_argument("--host", default="0.0.0.0" if os.environ.get("SI_TRADER_MODE") == "hosted" else "127.0.0.1")
     args = parser.parse_args()
-    with ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler) as server:
-        print(f"SI-Trader running at http://127.0.0.1:{server.server_port}", flush=True)
+    with create_server(args.host, args.port) as server:
+        print(f"SI-Trader running on {args.host}:{server.server_port} ({'hosted' if server.runtime.hosted else 'local'})", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

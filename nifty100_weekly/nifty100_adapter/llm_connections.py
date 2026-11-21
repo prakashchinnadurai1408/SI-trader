@@ -31,8 +31,17 @@ class Blob(ctypes.Structure):
 
 
 def protect(value, decrypt=False):
+    prefix = b"fernet:v1:"
+    key = os.environ.get("SI_TRADER_ENCRYPTION_KEY")
+    if (decrypt and value.startswith(prefix)) or (not decrypt and key):
+        from cryptography.fernet import Fernet, InvalidToken
+        try:
+            cipher = Fernet((key or "").encode())
+            return cipher.decrypt(value[len(prefix):]) if decrypt else prefix + cipher.encrypt(value)
+        except (ValueError, InvalidToken):
+            raise ValueError("The saved key cannot be opened. Check SI_TRADER_ENCRYPTION_KEY or save the connection again.") from None
     if os.name != "nt":
-        raise ValueError("Saved API keys currently require Windows encrypted storage.")
+        raise ValueError("Set SI_TRADER_ENCRYPTION_KEY for encrypted API key storage on this host.")
     buffer = ctypes.create_string_buffer(value)
     source = Blob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
     result = Blob()

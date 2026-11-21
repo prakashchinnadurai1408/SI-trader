@@ -12,3 +12,8 @@ llm_settings.json
 trader_session.json
 /data/
 /reports/
+/node_modules/
+/test-results/
+/dist/
+*.pem
+*.key

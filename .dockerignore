@@ -1,0 +1,14 @@
+.git
+legacy
+node_modules
+test-results
+dist
+.env
+.env.*
+*.pem
+*.key
+data
+reports
+**/__pycache__
+**/*.sqlite
+**/credentials.json

@@ -3,6 +3,8 @@
 import http.client
 import json
 import math
+import os
+from urllib.parse import urlsplit
 from time import perf_counter
 
 from .llm_connections import chat, profiles
@@ -13,7 +15,11 @@ def ollama(path, payload=None):
         if path != "/api/chat":
             raise ValueError("Cloud connections support chat requests.")
         return chat(payload["model"][8:], payload)
-    connection = http.client.HTTPConnection("127.0.0.1", 11434, timeout=180)
+    base = urlsplit(os.environ.get("SI_TRADER_OLLAMA_URL", "http://127.0.0.1:11434"))
+    if base.scheme not in ("http", "https") or not base.hostname or base.username or base.password or base.query or base.fragment or base.path not in ("", "/"):
+        raise ValueError("SI_TRADER_OLLAMA_URL must be an HTTP(S) origin without credentials or a path.")
+    client = http.client.HTTPSConnection if base.scheme == "https" else http.client.HTTPConnection
+    connection = client(base.hostname, base.port, timeout=180)
     try:
         method = "GET" if payload is None else "POST"
         body = None if payload is None else json.dumps(payload)
