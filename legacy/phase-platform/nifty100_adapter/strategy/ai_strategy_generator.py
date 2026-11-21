@@ -27,6 +27,8 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 from ..config.parameter_catalogue import PARAMETER_CATALOGUE as _PARAM_CATALOGUE
+from ._weight_utils import normalize_weights
+from .llm_client import LLMClient
 from ._weight_utils import normalize_weights, apply_adjustments
 
 
@@ -77,7 +79,14 @@ class AIStrategyGenerator:
         )
         strategies = generator.generate_strategy_configs(ideas)
     """
-    def __init__(self, llm_provider: str = "openai", api_key: Optional[str] = None):
+    SYSTEM_PROMPT = (
+        "You are a quantitative strategist for Indian equity markets. "
+        "You answer with strict JSON only."
+    )
+
+    def __init__(self, llm_provider: str = "openai", api_key: Optional[str] = None,
+                 model: Optional[str] = None,
+                 base_url: Optional[str] = None):
         self.llm_provider = llm_provider
         self.api_key = api_key
         self.supported_providers = [
@@ -91,7 +100,22 @@ class AIStrategyGenerator:
                 f"Available: {self.supported_providers}"
             )
 
-        logger.info(f"AI Strategy Generator initialized with provider: {llm_provider}")
+        # Real client; None means "templates only" (e.g. no API key present).
+        self._llm_client = None
+        try:
+            self._llm_client = LLMClient(
+                provider=llm_provider, model=model, api_key=api_key,
+                base_url=base_url)
+        except Exception as exc:
+            logger.info("LLM client unavailable for %s: %s", llm_provider, exc)
+
+        logger.info(f"AI Strategy Generator initialized with provider: {llm_provider}"
+                    f" (live completions: {bool(self._llm_client)})")
+
+    def has_live_llm(self) -> bool:
+        """True when this generator can call a real model."""
+        return (self._llm_client is not None
+                and self._llm_client.has_credentials())
 
     def generate_strategy_ideas(
         self,
@@ -120,10 +144,34 @@ class AIStrategyGenerator:
             risk_tolerance, num_ideas, capital
         )
 
-        # In production, this would call the actual LLM API
-        # For now, we generate template-based ideas that simulate LLM output
-        ideas = self._generate_strategy_ideas_locally(
-            market_condition, sector, time_horizon,
+        # Real LLM call first; local templates are the deterministic fallback.
+        ideas: List[StrategyIdea] = []
+        client = self._llm_client
+        if client is not None:
+            try:
+                raw = client.generate_strategy_ideas(
+                    self.SYSTEM_PROMPT, prompt, max_ideas=num_ideas)
+                for item in raw:
+                    ideas.append(StrategyIdea(
+                        name=item["name"],
+                        strategy_type=item["strategy_type"],
+                        description=item["description"],
+                        entry_rules=item["entry_rules"],
+                        exit_rules=item["exit_rules"],
+                        risk_rules=item["risk_rules"],
+                        confidence_score=item["confidence"],
+                        target_market_cap=sector if sector != "all" else "all",
+                        time_horizon=time_horizon,
+                        expected_hold_days=item["expected_hold_days"],
+                        risk_tolerance=risk_tolerance,
+                    ))
+            except Exception as exc:
+                logger.warning("LLM idea generation failed: %s", exc)
+                ideas = []
+
+        if not ideas:
+            ideas = self._generate_strategy_ideas_locally(
+                market_condition, sector, time_horizon,
             risk_tolerance, num_ideas
         )
 

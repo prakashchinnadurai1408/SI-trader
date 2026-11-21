@@ -27,6 +27,7 @@ from .ma_crossover_adapter import (
 from .ai_strategy_generator import (
     AIStrategyGenerator, StrategyIdea, StrategyGenerationResult,
 )
+from .llm_client import LLMClient, PROVIDERS, SUPPORTED_PROVIDERS
 from .options_strategy_adapter import (
     OptionsStrategyAdapter, OptionLeg, OptionStrategy, OptionStrategyResult,
     get_option_strategy_config, get_all_option_strategies,
@@ -50,6 +51,9 @@ __all__ = [
     "AIStrategyGenerator",
     "StrategyIdea",
     "StrategyGenerationResult",
+    "LLMClient",
+    "PROVIDERS",
+    "SUPPORTED_PROVIDERS",
     "OptionsStrategyAdapter",
     "OptionLeg",
     "OptionStrategy",
