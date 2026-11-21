@@ -14,6 +14,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
+  hosted: false, authLoading: true, authEmail: "",
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
   monthlyInputs: {start: "", end: "", capital: 1000000, includeAI: false, testPriceInputs: false, bundleId: ""}, monthlyResult: null, monthlyFeedback: "", monthlyError: false,
@@ -53,20 +54,20 @@ function signIn() {
       ${paper}
     </section>
     <section class="card">
-      ${steps(mfa ? 1 : 0)}
+      ${state.hosted ? '<p class="note">Hosted workspace · operator sign-in</p>' : steps(mfa ? 1 : 0)}
       <h1>${mfa ? "Authenticator code" : "Sign in"}</h1>
       <form id="${mfa ? "mfa" : "signin"}">
         ${mfa ? `<label for="code">Six-digit code</label>
           <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required placeholder="000000">
           <button>Continue to broker setup</button>` :
           `<label for="email">Email</label>
-          <input id="email" name="email" type="email" autocomplete="off" placeholder="you@example.com" required>
+          <input id="email" name="email" type="email" autocomplete="username" value="${escapeHtml(state.authEmail)}" placeholder="you@example.com" required>
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="off" minlength="12" placeholder="At least 12 characters" required>
-          <button>Continue to authenticator code</button>`}
+          <button ${state.busy ? "disabled" : ""}>${state.hosted ? "Sign in" : "Continue to authenticator code"}</button>`}
       </form>
-      <p class="note">Local demo. ${mfa ? "Use demo code <strong>" + demoCode + "</strong>." :
-        "Use <strong>" + demoEmail + "</strong> and <strong>" + demoPassword + "</strong>. Enter your broker credentials only on InvestRight."}</p>
+      <p class="note">${state.hosted ? "Use the operator account configured for this deployment. Broker credentials belong only on your broker's website." : "Local demo. " + (mfa ? "Use demo code <strong>" + demoCode + "</strong>." :
+        "Use <strong>" + demoEmail + "</strong> and <strong>" + demoPassword + "</strong>. Enter your broker credentials only on InvestRight.")}</p>
       ${feedback()}
     </section>
   </main>`;
@@ -90,7 +91,7 @@ function broker() {
         </section>
         <section class="card">
           <h2>2. Sign in on your broker’s own page</h2>
-          <p>InvestRight opens in a new tab. To check API access, configure your InvestRight API key and access token in the PowerShell session running SI-Trader.</p>
+          <p>InvestRight opens in a new tab. To check API access, configure your InvestRight API key and access token in the environment of the server running SI-Trader.</p>
           <div class="actions">
             <a class="button" href="https://investright.hdfcsec.com/login" target="_blank" rel="noopener noreferrer">Continue to broker login</a>
             <button class="secondary" data-action="verify" ${state.busy ? "disabled" : ""}>${state.busy ? "Checking…" : "Check API access"}</button>
@@ -174,12 +175,12 @@ function llmConfig() {
         <button value="save" ${state.busy || !available ? "disabled" : ""}>Save model</button>
       </div>
       ${tested?.model === state.modelDraft ? `<p class="note">Last response time · ${count((tested.elapsedMs / 1000).toFixed(1))} seconds</p>` : ""}
-      <p class="note">Local Ollama connects at 127.0.0.1:11434 and uses models installed on this machine.</p>
+      <p class="note">Ollama uses the service configured for the SI-Trader server, defaulting to 127.0.0.1:11434. Available models must be installed on that service.</p>
       ${feedback()}
     </form>
     <form class="card stack" id="cloud-connection">
       <h2>${state.connectionDraft.id ? "Edit connection" : "Add model connection"}</h2>
-      <p class="note">A test sends a short prompt. Cloud strategy runs send research evidence to the selected provider. API keys are encrypted for your Windows user on this machine.</p>
+      <p class="note">A test sends a short prompt. Cloud strategy runs send research evidence to the selected provider. API keys are encrypted in the server's configured private storage.</p>
       <label for="provider">Provider</label>
       <select id="provider" name="provider" required ${state.busy ? "disabled" : ""}>
         ${state.providers.map(item => `<option value="${escapeHtml(item.id)}" ${(state.connectionDraft.provider || "claude") === item.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
@@ -854,6 +855,7 @@ function dashboard() {
           ${primary.map(navButton).join("")}
           <button data-action="config" ${state.busy ? "disabled" : ""}>Settings</button>
           <button data-action="llm-config" ${state.busy ? "disabled" : ""}>LLM Configuration</button>
+          ${state.hosted ? '<button data-action="logout">Sign out</button>' : ""}
         </div>
         <details class="desk-more-links" ${state.moreLinksOpen ? "open" : ""}>
           <summary>Research &amp; execution</summary>
@@ -890,6 +892,7 @@ setInterval(() => {
 }, 30000);
 
 function render() {
+  if (state.authLoading) { app.innerHTML = '<main class="page"><p role="status">Checking workspace access…</p></main>'; return; }
   app.innerHTML = state.view === "config" ? strategyConfig() : state.view === "llm" ? llmConfig() : state.view === "dashboard" ? dashboard() : state.view === "broker" ? broker() : signIn();
 }
 
@@ -906,6 +909,11 @@ async function request(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const result = await response.json();
+  if (response.status === 401 && state.hosted && path !== "/api/auth/login") {
+    state.view = "signin";
+    state.snapshot = null;
+    render();
+  }
   if (!response.ok) throw new Error(result.error || "The local request failed.");
   return result;
 }
@@ -945,6 +953,18 @@ app.addEventListener("submit", async event => {
   event.preventDefault();
   const form = new FormData(event.target);
   if (event.target.id === "signin") {
+    if (state.hosted) {
+      state.authEmail = form.get("email");
+      state.busy = true;
+      show();
+      try {
+        await request("/api/auth/login", {email: form.get("email"), password: form.get("password")});
+        state.view = "broker";
+        show();
+      } catch (error) { show(error.message, true); }
+      finally { state.busy = false; render(); }
+      return;
+    }
     if (form.get("email") !== demoEmail || form.get("password") !== demoPassword) {
       show("Use the local demo credentials shown below the form.", true);
       return;
@@ -1168,6 +1188,13 @@ app.addEventListener("submit", async event => {
 app.addEventListener("click", async event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   switch (action) {
+    case "logout":
+      if (state.busy) break;
+      try {
+        await request("/api/auth/logout", {});
+        window.location.reload();
+      } catch (error) { show(error.message, true); }
+      break;
     case "parameter-run":
       state.preferParameterPreview = false;
       state.parameterReportMessage = "";
@@ -1375,3 +1402,14 @@ app.addEventListener("click", async event => {
 });
 
 render();
+fetch("/api/auth/session").then(response => {
+  if (!response.ok) throw new Error("Could not check workspace access.");
+  return response.json();
+}).then(session => {
+  state.hosted = session.hosted;
+  if (session.hosted && session.authenticated) state.view = "broker";
+  state.authLoading = false;
+  render();
+}).catch(() => {
+  app.innerHTML = '<main class="page"><p role="alert">Could not check workspace access. Reload to retry.</p></main>';
+});

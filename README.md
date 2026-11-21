@@ -24,10 +24,11 @@ To launch directly with Python, run `python -X utf8 -m nifty100_weekly.nifty100_
 
 Open http://127.0.0.1:8765. The local sign-in screen shows the demo credentials. Open **LLM Configuration** to add, test, and select local Ollama models or cloud connections for AI research. See the [model setup guide](nifty100_weekly/USER_JOURNEY.md#add-and-manage-cloud-models) for providers and API key management. **Data feeds** and its **Refresh data feeds** action work without a model.
 
-The service binds to loopback. The browser sign-in is a demo. Do not expose this deployment to the public internet. InvestRight account views require INVESTRIGHT_API_KEY and INVESTRIGHT_ACCESS_TOKEN in the server environment. They are read-only. Keep account credentials and local evidence files outside Git.
+By default the service binds to loopback and uses a demo sign-in. Keep that mode local. For a private hosted deployment, use the separate authenticated mode and reverse-proxy setup in the [deployment guide](deploy/README.md). InvestRight account views require INVESTRIGHT_API_KEY and INVESTRIGHT_ACCESS_TOKEN in the server environment. They are read-only. Keep account credentials and local evidence files outside Git.
 
 - [Catalogue feed setup](nifty100_weekly/CATALOGUE_FEEDS.md)
 - [Monthly backtesting and strategy comparison](nifty100_weekly/MONTHLY_BACKTEST.md)
 - [Gate G1](nifty100_weekly/GATE_G1.md)
 - [Six-rebalance paper pilot and screenshot review](nifty100_weekly/PAPER_PILOT.md)
 - [Agent tools and filing review workflow](nifty100_weekly/AGENT_TOOLS.md)
+- [CI, hosted authentication, Docker and Stormkit deployment](deploy/README.md)
