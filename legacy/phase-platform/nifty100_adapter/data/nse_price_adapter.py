@@ -23,9 +23,28 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import logging
 import asyncio
-import aiohttp
 
 logger = logging.getLogger(__name__)
+
+
+def _aiohttp():
+    """Return the aiohttp module, or None if it is not installed.
+
+    aiohttp is an OPTIONAL dependency. The NSE price adapter uses it for async
+    HTTP; without it the adapter reports unavailable instead of failing at
+    import time.
+    """
+    try:
+        import aiohttp
+        return aiohttp
+    except ImportError:
+        logger.warning(
+            "aiohttp not installed - pip install aiohttp "
+            "(or: pip install -r requirements-optional.txt). "
+            "NSE price history is unavailable; use broker historical APIs."
+        )
+        return None
+
 
 
 @dataclass
@@ -79,7 +98,7 @@ class NSEPriceAdapter:
     def __init__(self, api_key: Optional[str] = None, base_url: str = "https://www.nseindia.com"):
         self.api_key = api_key
         self.base_url = base_url
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session = None  # type: ignore[assignment]
         self._cache: Dict[str, Any] = {}
         self._cache_ttl: Dict[str, datetime] = {}
         self.cache_ttl_minutes = 15  # Cache for 15 minutes
@@ -87,6 +106,11 @@ class NSEPriceAdapter:
         logger.info("NSEPriceAdapter initialized")
 
     async def __aenter__(self):
+        aiohttp = _aiohttp()
+        if aiohttp is None:
+            raise RuntimeError(
+                "aiohttp is not installed; cannot open an NSE HTTP session"
+            )
         self.session = aiohttp.ClientSession(
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -103,6 +127,9 @@ class NSEPriceAdapter:
     async def _fetch(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """Fetch data from NSE API with retry logic."""
         if not self.session:
+            aiohttp = _aiohttp()
+            if aiohttp is None:
+                return None
             self.session = aiohttp.ClientSession()
 
         try:

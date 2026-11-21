@@ -167,6 +167,31 @@ class PortfolioOptimizer:
             total_allocated += capital_allocated
             total_risk += alloc.get("risk_contribution_pct", 0)
 
+        # Enforce the BRD cash buffer: never deploy more than
+        # (1 - cash_buffer_pct) of capital, regardless of how many strategies
+        # were requested. Scale every allocation down proportionally instead of
+        # breaching the buffer.
+        max_deployable = self.capital * (1.0 - self.cash_buffer_pct)
+        if strategy_allocations and total_allocated > max_deployable + 1e-9:
+            scale = max_deployable / total_allocated
+            scaled: List[StrategyAllocation] = []
+            for a in strategy_allocations:
+                new_capital = a.capital_allocated * scale
+                new_weight = a.weight_pct * scale
+                scaled.append(StrategyAllocation(
+                    strategy_name=a.strategy_name,
+                    strategy_type=a.strategy_type,
+                    weight_pct=round(new_weight, 2),
+                    capital_allocated=round(new_capital, 2),
+                    max_position_pct=min(10.0, new_capital / self.capital * 100),
+                    expected_return_pct=a.expected_return_pct,
+                    expected_volatility_pct=a.expected_volatility_pct,
+                    expected_sharpe=a.expected_sharpe,
+                    risk_contribution_pct=a.risk_contribution_pct * scale,
+                ))
+            strategy_allocations = scaled
+            total_allocated = sum(a.capital_allocated for a in scaled)
+
         cash_remaining = self.capital - total_allocated
         cash_pct = (cash_remaining / self.capital) * 100 if self.capital > 0 else 0
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Callable
+import importlib
 from datetime import datetime, timedelta
 import logging
 import asyncio
@@ -302,3 +303,95 @@ class DataPipelineOrchestrator:
             "adapters_due": len(self.get_stale_adapters()),
             "last_refresh": self.refresh_results[-1].timestamp if self.refresh_results else None,
         }
+
+
+# =============================================================================
+# Default pipeline construction
+# =============================================================================
+
+DEFAULT_ADAPTER_SPECS = [
+    ("nse_price", "..data.nse_price_adapter", "daily", [
+        "price_momentum_weekly", "price_momentum_monthly",
+        "price_momentum_yearly", "midcap_liquidity_score",
+        "midcap_volatility_adj", "liquidity_floor",
+    ]),
+    ("nse_fundamentals", "..data.fundamentals_adapter", "quarterly", [
+        "f_score", "altman_z_score", "pe_ratio_vs_sector", "roe_trend",
+        "earnings_trend", "debt_equity_ratio", "interest_coverage",
+        "cash_flow_positive",
+    ]),
+    ("nse_shareholding", "..data.shareholding_adapter", "quarterly", [
+        "promoter_holding_pct", "promoter_pledging_pct",
+    ]),
+    ("news_sentiment", "..data.news_sentiment_adapter", "daily", [
+        "historical_news_sentiment",
+    ]),
+    ("regulatory", "..data.regulatory_adapter", "on-event", [
+        "legal_cases_directors", "legal_cases_company_promoters",
+        "auditor_resignations", "bulk_block_deals",
+    ]),
+]
+
+
+def build_default_pipeline(
+    orchestrator: Optional[DataPipelineOrchestrator] = None,
+) -> DataPipelineOrchestrator:
+    """Register every available data adapter on an orchestrator.
+
+    Adapters whose optional dependency is missing are skipped with a warning,
+    so the pipeline always registers at least the adapters that can run.
+    """
+    orchestrator = orchestrator or DataPipelineOrchestrator()
+
+    for name, import_path, schedule, params in DEFAULT_ADAPTER_SPECS:
+        try:
+            module = importlib.import_module(
+                import_path, package="nifty100_adapter.data")
+        except Exception as exc:
+            logger.warning("Skipping adapter %s (%s unavailable): %s",
+                           name, import_path, exc)
+            continue
+
+        adapter_cls = None
+        for attr in dir(module):
+            obj = getattr(module, attr)
+            if (isinstance(obj, type) and attr.endswith("Adapter")
+                    and attr != "BrokerAdapter"):
+                adapter_cls = obj
+                break
+        if adapter_cls is None:
+            logger.warning("No adapter class found in %s", import_path)
+            continue
+
+        try:
+            adapter = adapter_cls()
+        except Exception as exc:
+            logger.warning("Cannot instantiate %s: %s", name, exc)
+            continue
+
+        orchestrator.register_adapter(name, adapter, schedule, params)
+
+    return orchestrator
+
+
+async def run_pipeline(force: bool = False) -> Dict[str, Any]:
+    """Build the default pipeline and refresh it.
+
+    Args:
+        force: refresh every adapter regardless of schedule
+
+    Returns a summary dict; safe to call when optional deps are missing.
+    """
+    orchestrator = build_default_pipeline()
+    registered = list(orchestrator.adapters.keys())
+
+    results = (await orchestrator.refresh_now(registered) if force
+               else await orchestrator.refresh_all())
+
+    return {
+        "adapters_registered": registered,
+        "adapters_refreshed": [r.data_source for r in results if r.success],
+        "adapters_failed": [r.data_source for r in results if not r.success],
+        "health": orchestrator.get_health().__dict__,
+        "summary": orchestrator.get_refresh_summary(),
+    }

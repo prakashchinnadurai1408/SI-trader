@@ -23,9 +23,21 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 import logging
 import asyncio
-import aiohttp
+try:
+    import aiohttp
+except ImportError:  # optional dependency
+    aiohttp = None
 
 logger = logging.getLogger(__name__)
+
+def _require_aiohttp():
+    """Raise a clear error when the optional aiohttp dependency is missing."""
+    if aiohttp is None:
+        raise RuntimeError(
+            "aiohttp is not installed; install optional dependencies with "
+            "`pip install -r requirements-optional.txt`"
+        )
+
 
 
 @dataclass
@@ -96,6 +108,7 @@ class ShareholdingAdapter:
         logger.info("ShareholdingAdapter initialized")
 
     async def __aenter__(self):
+        _require_aiohttp()
         self.session = aiohttp.ClientSession(
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -110,7 +123,8 @@ class ShareholdingAdapter:
             await self.session.close()
 
     async def _fetch(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
-        """Fetch data from NSE API with retry logic."""
+        """Fetch data from the API with retry logic."""
+        _require_aiohttp()
         if not self.session:
             self.session = aiohttp.ClientSession()
 
