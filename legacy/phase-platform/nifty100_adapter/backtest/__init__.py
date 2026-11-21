@@ -24,6 +24,9 @@ External engine adapters
 """
 
 from .enhanced_backtester import Phase1Backtester
+from .sitrader_strategy_backtester import (
+    StrategyBacktester, StrategyBacktestResult, backtest_strategy,
+)
 from .vectorbt_adapter import VectorBTAdapter
 from .backtrader_adapter import BacktraderAdapter
 from .monte_carlo_simulator import MonteCarloSimulator
@@ -34,6 +37,9 @@ from .compare_strategies import compare_runs
 
 __all__ = [
     "Phase1Backtester",
+    "StrategyBacktester",
+    "StrategyBacktestResult",
+    "backtest_strategy",
     "VectorBTAdapter",
     "BacktraderAdapter",
     "MonteCarloSimulator",

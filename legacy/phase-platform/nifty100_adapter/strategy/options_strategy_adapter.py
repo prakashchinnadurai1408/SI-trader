@@ -1,42 +1,43 @@
 """Options Strategy Adapter for SI-Trader.
 
-Integrates options strategies into the SI-Trader platform while maintaining
-BRD compliance. Since SI-Trader is primarily a weekly delivery platform,
-options strategies are adapted for cash-settled index options (Nifty 50,
-Bank Nifty) with cash settlement - no physical delivery required.
+Integrates options strategies into the SI-Trader platform while keeping the
+BRD delivery boundary intact: the strategies here are cash-settled index
+options (Nifty 50 / Bank Nifty), so no physical delivery is involved.
 
-Supported Strategies:
-- Bull Call Spread
-- Bear Put Spread
-- Iron Condor
-- Straddle / Strangle
-- Covered Call (with underlying delivery)
-- Protective Put (with underlying delivery)
+Supported strategies
+    bull_call_spread   - buy nearer CE, sell farther CE (bullish debit)
+    bear_put_spread    - buy nearer PE, sell farther PE (bearish debit)
+    iron_condor        - sell both call and put spreads (range bound credit)
+    long_straddle      - ATM CE + ATM PE (volatility)
+    long_strangle      - OTM CE + OTM PE (volatility, cheaper)
+    covered_call       - stock + short OTM CE
+    protective_put     - stock + long OTM PE
 
-Parameters mapped to the 30-parameter catalogue for backtesting compatibility.
+Payoffs are computed with Black-Scholes premiums and reported per unit
+(1 lot); margins are rupee estimates for a single unit.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
+import math
+
+from ._weight_utils import normalize_weights
 
 logger = logging.getLogger(__name__)
-from ..config.parameter_catalogue import PARAMETER_CATALOGUE as _PARAM_CATALOGUE
-from ._weight_utils import normalize_weights, apply_adjustments
-
 
 
 @dataclass
 class OptionLeg:
-    """Single option leg in a strategy."""
-    option_type: str  # CE (Call) or PE (Put)
+    """A single option (or stock) leg."""
+    option_type: str  # CE, PE or STOCK
     strike: float
     premium: float
-    lot_size: int
-    action: str  # BUY or SELL
+    lot_size: int = 1
+    action: str = "BUY"  # BUY or SELL
 
 
 @dataclass
@@ -44,281 +45,323 @@ class OptionStrategy:
     """Options strategy definition."""
     name: str
     display_name: str
-    strategy_type: str  # debit_spread, credit_spread, neutral, directional_hedge
-    legs: List[dict]  # List of option leg dicts
+    strategy_type: str
+    legs: List[dict]
     description: str
-    max_profit: float
-    max_loss: float
-    breakeven_points: List[float]
-    suitable_market_condition: str  # bullish, bearish, neutral, volatile
-    timeframe: str  # weekly, monthly
-    min_lot_size: int
-    margin_required: float  # Estimated margin required
+    suitable_market_condition: str
+    timeframe: str
 
 
 @dataclass
 class OptionStrategyResult:
-    """Result of option strategy encoding."""
+    """Encoded strategy plus its economics."""
     strategy_name: str
     parameter_weights: Dict[str, int]
     weight_total: int
     brd_compliant: bool
-    strategy_details: Dict[str, Any]
-    capital_required: float
-    max_loss: float
     max_profit: float
+    max_loss: float
     breakeven: List[float]
+    margin_required: float
+    reward_risk_ratio: float
 
 
 class OptionsStrategyAdapter:
-    """Options Strategy Adapter for SI-Trader.
+    """Options strategies -> SI-Trader parameter weights + payoff profile."""
 
-    Encodes options strategies into the SI-Trader 30-parameter catalogue
-    weight system. Options are cash-settled (Nifty 50, Bank Nifty) to
-    maintain delivery-only compliance of the platform.
-
-    Strategies available:
-    - Bull Call Spread (Debit spread, bullish)
-    - Bear Put Spread (Debit spread, bearish)
-    - Iron Condor (Credit spread, neutral)
-    - Long Straddle (Volatility, neutral)
-    - Long Strangle (Volatility, neutral)
-    - Covered Call (with underlying delivery)
-    - Protective Put (with underlying delivery)
-    """
-    def __init__(self):
-        self._validate_base_weights()
-
-    # Base weights that sum to 100
-    # Derived from the authoritative parameter catalogue so weights can never
-    # drift from the BRD requirement (48 enabled parameters, total weight 100).
-    BASE_WEIGHTS = {k: p.weight for k, p in _PARAM_CATALOGUE.items() if p.enable_switch}
-
-    _TOTAL_CHECK = sum(BASE_WEIGHTS.values())
-    assert _TOTAL_CHECK == 100, f"BASE_WEIGHTS total is {_TOTAL_CHECK}, must be 100"
-
-    # Option strategy definitions
-    OPTION_STRATEGIES = {
+    OPTION_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "bull_call_spread": {
             "display_name": "Bull Call Spread",
             "strategy_type": "debit_spread",
-            "description": "Buy lower strike call, sell higher strike call. Limited risk, limited profit.",
-            "legs": [
-                {"action": "BUY", "option_type": "CE", "strike_offset": -50, "weight": 1},
-                {"action": "SELL", "option_type": "CE", "strike_offset": +50, "weight": -1},
-            ],
+            "description": "Buy nearer-strike call, sell farther-strike call. "
+                           "Limited risk, limited profit.",
             "suitable_market_condition": "bullish",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "CE", "strike_offset": -50},
+                {"action": "SELL", "option_type": "CE", "strike_offset": +50},
+            ],
         },
         "bear_put_spread": {
             "display_name": "Bear Put Spread",
             "strategy_type": "debit_spread",
-            "description": "Buy higher strike put, sell lower strike put. Limited risk, limited profit.",
-            "legs": [
-                {"action": "BUY", "option_type": "PE", "strike_offset": +50, "weight": 1},
-                {"action": "SELL", "option_type": "PE", "strike_offset": -50, "weight": -1},
-            ],
+            "description": "Buy nearer-strike put, sell farther-strike put. "
+                           "Limited risk, limited profit.",
             "suitable_market_condition": "bearish",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "PE", "strike_offset": +50},
+                {"action": "SELL", "option_type": "PE", "strike_offset": -50},
+            ],
         },
         "iron_condor": {
             "display_name": "Iron Condor",
             "strategy_type": "credit_spread",
-            "description": "Sell OTM call spread and OTM put spread. Profits from range-bound market.",
-            "legs": [
-                {"action": "SELL", "option_type": "CE", "strike_offset": +100, "weight": -1},
-                {"action": "BUY", "option_type": "CE", "strike_offset": +150, "weight": 1},
-                {"action": "SELL", "option_type": "PE", "strike_offset": -100, "weight": -1},
-                {"action": "BUY", "option_type": "PE", "strike_offset": -150, "weight": 1},
-            ],
+            "description": "Sell an OTM call spread and an OTM put spread; "
+                           "profits when the index stays in a range.",
             "suitable_market_condition": "neutral",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "SELL", "option_type": "CE", "strike_offset": +100},
+                {"action": "BUY", "option_type": "CE", "strike_offset": +150},
+                {"action": "SELL", "option_type": "PE", "strike_offset": -100},
+                {"action": "BUY", "option_type": "PE", "strike_offset": -150},
+            ],
         },
         "long_straddle": {
             "display_name": "Long Straddle",
             "strategy_type": "neutral_volatility",
-            "description": "Buy ATM call and put. Profits from large move in either direction.",
-            "legs": [
-                {"action": "BUY", "option_type": "CE", "strike_offset": 0, "weight": 1},
-                {"action": "BUY", "option_type": "PE", "strike_offset": 0, "weight": 1},
-            ],
+            "description": "Buy ATM call and put; profits from a large move "
+                           "in either direction.",
             "suitable_market_condition": "volatile",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "CE", "strike_offset": 0},
+                {"action": "BUY", "option_type": "PE", "strike_offset": 0},
+            ],
         },
         "long_strangle": {
             "display_name": "Long Strangle",
             "strategy_type": "neutral_volatility",
-            "description": "Buy OTM call and put. Cheaper than straddle, needs larger move.",
-            "legs": [
-                {"action": "BUY", "option_type": "CE", "strike_offset": +50, "weight": 1},
-                {"action": "BUY", "option_type": "PE", "strike_offset": -50, "weight": 1},
-            ],
+            "description": "Buy OTM call and put; cheaper than the straddle "
+                           "but needs a larger move.",
             "suitable_market_condition": "volatile",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "CE", "strike_offset": +50},
+                {"action": "BUY", "option_type": "PE", "strike_offset": -50},
+            ],
         },
         "covered_call": {
             "display_name": "Covered Call",
             "strategy_type": "directional_hedge",
-            "description": "Buy stock, sell OTM call against it. Generates income in flat market.",
-            "legs": [
-                {"action": "BUY", "option_type": "STOCK", "strike_offset": 0, "weight": 1},
-                {"action": "SELL", "option_type": "CE", "strike_offset": +50, "weight": -0.5},
-            ],
+            "description": "Hold stock and sell an OTM call against it.",
             "suitable_market_condition": "neutral_to_bullish",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "STOCK", "strike_offset": 0},
+                {"action": "SELL", "option_type": "CE", "strike_offset": +50},
+            ],
         },
         "protective_put": {
             "display_name": "Protective Put",
             "strategy_type": "directional_hedge",
-            "description": "Buy stock, buy put for downside protection.",
-            "legs": [
-                {"action": "BUY", "option_type": "STOCK", "strike_offset": 0, "weight": 1},
-                {"action": "BUY", "option_type": "PE", "strike_offset": -50, "weight": 1},
-            ],
+            "description": "Hold stock and buy an OTM put for downside cover.",
             "suitable_market_condition": "bullish_with_protection",
             "timeframe": "weekly",
+            "legs": [
+                {"action": "BUY", "option_type": "STOCK", "strike_offset": 0},
+                {"action": "BUY", "option_type": "PE", "strike_offset": -50},
+            ],
         },
     }
 
-    def __init__(self):
-        self._validate_weights()
+    _WEIGHT_ADJUSTMENTS = {
+        "debit_spread": {"price_momentum_weekly": 2,
+                         "midcap_volatility_adj": 1},
+        "credit_spread": {"price_momentum_monthly": 2,
+                          "midcap_volatility_adj": 2},
+        "neutral_volatility": {"midcap_volatility_adj": 3,
+                               "historical_news_sentiment": 2},
+        "directional_hedge": {"price_momentum_weekly": 2,
+                              "midcap_liquidity_score": 1},
+    }
 
-    def _validate_weights(self):
-        """Validate base weights sum to 100."""
-        total = sum(self.BASE_WEIGHTS.values())
-        if total != 100:
-            raise ValueError(f"BASE_WEIGHTS total is {total}, must be 100")
+    def __init__(self):
+        from ..config.parameter_catalogue import PARAMETER_CATALOGUE
+        self.base_weights = {k: p.weight for k, p in
+                             PARAMETER_CATALOGUE.items() if p.enable_switch}
 
     def get_available_strategies(self) -> List[Dict[str, Any]]:
-        """Get list of all available options strategies."""
-        strategies = []
-        for key, config in self.OPTION_STRATEGIES.items():
-            strategies.append({
-                "strategy_name": key,
-                "display_name": config["display_name"],
-                "strategy_type": config["strategy_type"],
-                "description": config["description"],
-                "suitable_market_condition": config["suitable_market_condition"],
-                "timeframe": config["timeframe"],
-                "legs": config["legs"],
-            })
-        return strategies
+        return [
+            {"strategy_name": k,
+             "display_name": v["display_name"],
+             "strategy_type": v["strategy_type"],
+             "description": v["description"],
+             "suitable_market_condition": v["suitable_market_condition"],
+             "legs": v["legs"]}
+            for k, v in self.OPTION_STRATEGIES.items()
+        ]
+
+    # ------------------------------------------------------------------
+    # Black-Scholes helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _norm_cdf(x: float) -> float:
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+    @classmethod
+    def _bs_price(cls, spot: float, strike: float, opt_type: str,
+                  vol: float = 0.15, t: float = 1 / 365 * 7,
+                  r: float = 0.065) -> float:
+        """Black-Scholes premium for one unit of the underlying."""
+        if spot <= 0 or strike <= 0 or vol <= 0 or t <= 0:
+            return 0.0
+        d1 = (math.log(spot / strike) + (r + vol * vol / 2) * t) / (vol * math.sqrt(t))
+        d2 = d1 - vol * math.sqrt(t)
+        if opt_type == "CE":
+            return spot * cls._norm_cdf(d1) - strike * math.exp(-r * t) * cls._norm_cdf(d2)
+        return strike * math.exp(-r * t) * cls._norm_cdf(-d2) - spot * cls._norm_cdf(-d1)
+
+    def _premium(self, spot: float, strike: float,
+                 option_type: str) -> float:
+        if option_type == "STOCK":
+            return spot  # cost of holding one unit of the underlying
+        return self._bs_price(spot, strike, option_type)
+
+    # ------------------------------------------------------------------
+    # Payoff profile
+    # ------------------------------------------------------------------
+
+    def _legs(self, strategy: Dict[str, Any],
+              underlying_price: float) -> List[OptionLeg]:
+        legs = []
+        for leg in strategy["legs"]:
+            otype = leg.get("option_type", "CE")
+            strike = underlying_price + leg.get("strike_offset", 0)
+            legs.append(OptionLeg(
+                option_type=otype,
+                strike=strike,
+                premium=self._premium(underlying_price, strike, otype),
+                lot_size=1,
+                action=leg.get("action", "BUY"),
+            ))
+        return legs
+
+    @classmethod
+    def _payoff_points(cls, legs: List[OptionLeg],
+                       underlying_price: float) -> List[tuple]:
+        low = max(1.0, underlying_price * 0.6)
+        high = underlying_price * 1.6
+        steps = 81
+        points = []
+        for i in range(steps):
+            spot = low + (high - low) * i / (steps - 1)
+            total = 0.0
+            for leg in legs:
+                if leg.option_type == "STOCK":
+                    intrinsic = spot
+                elif leg.option_type == "CE":
+                    intrinsic = max(0.0, spot - leg.strike)
+                else:  # PE
+                    intrinsic = max(0.0, leg.strike - spot)
+                sign = -1.0 if leg.action == "SELL" else 1.0
+                total += sign * (intrinsic - leg.premium) * leg.lot_size
+            points.append((spot, total))
+        return points
+
+    @staticmethod
+    def _breakevens(points: List[tuple]) -> List[float]:
+        out: List[float] = []
+        for i in range(1, len(points)):
+            s0, v0 = points[i - 1]
+            s1, v1 = points[i]
+            if v0 == 0:
+                out.append(s0)
+            elif (v0 < 0) != (v1 < 0):
+                out.append(s0 + (s1 - s0) * abs(v0) / (abs(v0) + abs(v1)))
+        return sorted(set(round(x, 2) for x in out))
+
+    def compute_payoff(self, legs: List[OptionLeg],
+                       underlying_price: float) -> Dict[str, Any]:
+        """Expiry payoff profile, per unit of the underlying."""
+        if not legs:
+            return {"max_profit": 0.0, "max_loss": 0.0, "breakeven": [],
+                    "margin_required": 0.0, "reward_risk_ratio": 0.0,
+                    "net_premium": 0.0}
+
+        points = self._payoff_points(legs, underlying_price)
+        values = [v for _, v in points]
+        max_profit = max(values)
+        min_value = min(values)
+        max_loss = -min_value if min_value < 0 else 0.0
+        net_premium = sum(
+            (l.premium if l.action == "BUY" else -l.premium) * l.lot_size
+            for l in legs)
+
+        # Long premium legs tie up the premium paid; short legs are margined
+        # on their maximum loss.
+        margin = 0.0
+        for l in legs:
+            if l.action == "BUY":
+                margin += l.premium * l.lot_size
+            else:
+                margin += max_loss if max_loss > 0 else l.premium * l.lot_size
+
+        rr = (max_profit / max_loss) if max_loss > 0 else 0.0
+        return {
+            "max_profit": round(max_profit, 2),
+            "max_loss": round(max_loss, 2),
+            "breakeven": self._breakevens(points),
+            "margin_required": round(margin, 2),
+            "reward_risk_ratio": round(rr, 2),
+            "net_premium": round(net_premium, 2),
+        }
+
+    # ------------------------------------------------------------------
+    # Strategy config
+    # ------------------------------------------------------------------
 
     def get_strategy_config(
         self,
         strategy_name: str,
-        underlying_price: float = 19000.0,  # Approximate Nifty 50 level
+        underlying_price: float = 19000.0,  # approx Nifty 50 level
     ) -> Dict[str, Any]:
-        """Generate strategy configuration for SI-Trader.
-
-        Args:
-            strategy_name: Name of the options strategy
-            underlying_price: Current underlying price (Nifty 50 approx)
-
-        Returns:
-            Strategy configuration dict for SI-Trader integration
-        """
         if strategy_name not in self.OPTION_STRATEGIES:
             raise ValueError(
                 f"Unknown strategy: {strategy_name}. "
-                f"Available: {list(self.OPTION_STRATEGIES.keys())}"
-            )
+                f"Available: {list(self.OPTION_STRATEGIES.keys())}")
 
-        config = self.OPTION_STRATEGIES[strategy_name]
+        strategy = self.OPTION_STRATEGIES[strategy_name]
+        weights = normalize_weights({
+            **self.base_weights,
+            **self._WEIGHT_ADJUSTMENTS.get(strategy["strategy_type"], {}),
+        })
+        legs = self._legs(strategy, underlying_price)
+        payoff = self.compute_payoff(legs, underlying_price)
 
-        # Adjust base weights based on strategy type
-        weights = dict(self.BASE_WEIGHTS)
-
-        # Strategy-specific weight adjustments
-        adjustments = self._get_strategy_adjustments(config["strategy_type"])
-        for param_key, adjustment in adjustments.items():
-            if param_key in weights:
-                weights[param_key] = max(1, weights[param_key] + adjustment)
-
-        # Renormalize to 100
-        weights = normalize_weights(weights)
-
-        final_total = sum(weights.values())
-        if final_total != 100:
-            raise ValueError(f"Final weight total is {final_total}, must be 100")
-
-        # Calculate strategy specifics
-        result = {
+        return {
             "strategy_name": strategy_name,
-            "strategy_type": config["strategy_type"],
-            "description": config["description"],
+            "strategy_type": strategy["strategy_type"],
+            "description": strategy["description"],
             "parameter_weights": weights,
             "weight_total": sum(weights.values()),
             "brd_compliant": sum(weights.values()) == 100,
-            "suitable_market_condition": config["suitable_market_condition"],
-            "timeframe": config["timeframe"],
+            "suitable_market_condition": strategy["suitable_market_condition"],
+            "timeframe": strategy["timeframe"],
             "underlying_price": underlying_price,
-            "legs": config["legs"],
-            "legs_count": len(config["legs"]),
-            "delivery_compatible": True,  # Cash-settled index options
+            "legs": [l.__dict__ for l in legs],
+            "legs_count": len(legs),
+            "max_profit": payoff["max_profit"],
+            "max_loss": payoff["max_loss"],
+            "breakeven": payoff["breakeven"],
+            "margin_required": payoff["margin_required"],
+            "capital_required": payoff["margin_required"],
+            "reward_risk_ratio": payoff["reward_risk_ratio"],
+            "delivery_compatible": True,  # cash-settled index options
             "generated_at": datetime.now().isoformat(),
         }
 
-        return result
 
-    def _get_strategy_adjustments(self, strategy_type: str) -> Dict[str, int]:
-        """Get weight adjustments for each strategy type."""
-        adjustments_map = {
-            "debit_spread": {
-                "price_momentum_weekly": 2,
-                "midcap_volatility_adj": 1,
-                "historical_news_sentiment": 1,
-                "roe_trend": -1,
-                "earnings_trend": -1,
-            },
-            "credit_spread": {
-                "price_momentum_weekly": 1,
-                "price_momentum_monthly": 2,
-                "midcap_volatility_adj": 2,
-                "roe_trend": 1,
-                "earnings_trend": 1,
-                "swot_analytics": 1,
-            },
-            "neutral_volatility": {
-                "midcap_volatility_adj": 3,
-                "historical_news_sentiment": 2,
-                "price_momentum_weekly": -1,
-                "price_momentum_monthly": -1,
-                "roe_trend": -1,
-                "earnings_trend": -1,
-            },
-            "directional_hedge": {
-                "price_momentum_weekly": 2,
-                "roe_trend": 2,
-                "earnings_trend": 2,
-                "midcap_volatility_adj": -1,
-                "midcap_liquidity_score": 1,
-            },
-        }
-        return adjustments_map.get(strategy_type, {})
-
-    def get_all_strategies(self) -> List[Dict[str, Any]]:
-        """Get all options strategy configs."""
-        return [
-            self.generate_strategy_config(name)
-            for name in self.OPTION_STRATEGIES
-        ]
-
-
-# Convenience functions
-def get_option_strategy_config(
-    strategy_name: str,
-    underlying_price: float = 19000.0
-) -> Dict[str, Any]:
-    """Convenience function to get option strategy config."""
+def get_option_strategy_config(strategy_name: str,
+                               underlying_price: float = 19000.0
+                               ) -> Dict[str, Any]:
+    """Convenience function to get an option strategy config."""
     adapter = OptionsStrategyAdapter()
     return adapter.get_strategy_config(strategy_name, underlying_price)
 
 
-def get_all_option_strategies(
-    underlying_price: float = 19000.0
-) -> List[Dict[str, Any]]:
-    """Get all options strategy configs."""
+def get_all_option_strategies(underlying_price: float = 19000.0
+                              ) -> List[Dict[str, Any]]:
+    """Get all option strategy configs."""
     adapter = OptionsStrategyAdapter()
     return [adapter.get_strategy_config(name, underlying_price)
             for name in adapter.OPTION_STRATEGIES]
+
+
+__all__ = [
+    "OptionLeg", "OptionStrategy", "OptionStrategyResult",
+    "OptionsStrategyAdapter", "get_option_strategy_config",
+    "get_all_option_strategies",
+]

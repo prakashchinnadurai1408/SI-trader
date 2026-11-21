@@ -534,16 +534,50 @@ class UniversalStrategyHub:
                 signals=signals,
                 cost_pct=self.config.cost_pct,
             )
-        else:
+        elif engine in ("auto", "backtrader") and self.backtrader \
+                and self.backtrader.is_available():
             result = self._backtest_with_sitrader(candidate, price_data)
+        else:
+            # Default: weight-aware SI-Trader backtest. This is the only
+            # engine that actually uses the candidate's weights, so it is
+            # the fallback rather than the generic synthetic pipeline.
+            result = self._backtest_with_weights(candidate, price_data)
         
         if result:
             candidate.backtest_results = result
             candidate.edge_validation = self.validate_edge(result)
+            # net_edge is the per-trade average edge, not the total return;
+            # the weighted engine reports it directly.
+            if isinstance(result, dict) and "avg_trade" in result:
+                candidate.edge_validation["net_edge"] = result["avg_trade"]
+                candidate.edge_validation["edge_passes"] = (
+                    result["avg_trade"] > self.config.min_edge_pct)
             self._audit("backtest", candidate.name, engine, result)
         
         return result or {}
     
+    def _backtest_with_weights(self, candidate, price_data):
+        """Backtest using the candidate's own parameter weights.
+
+        `price_data` may be {symbol: [bar dicts]} or a DataFrame with a
+        'close' column; the weighted engine needs per-symbol bars so a
+        DataFrame is backtested as a single unnamed series.
+        """
+        from ..backtest.sitrader_strategy_backtester import StrategyBacktester
+
+        if hasattr(price_data, "columns"):  # pandas DataFrame
+            try:
+                bars = price_data.to_dict("records")
+            except Exception:
+                bars = price_data[["close"]].to_dict("records")
+            series = {"_single": bars}
+        else:
+            series = {str(k): list(v) for k, v in dict(price_data).items()}
+
+        backtester = StrategyBacktester(
+            capital=self.config.pilot_capital, top_n=self.config.max_positions)
+        return backtester.run_candidate(candidate, series)
+
     def _generate_signals_from_weights(
         self,
         candidate: StrategyCandidate,
