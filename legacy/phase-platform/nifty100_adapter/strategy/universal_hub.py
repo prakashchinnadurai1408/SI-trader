@@ -5,13 +5,15 @@ Combines all integration layers into a unified strategy solution:
 1. Broker Connectivity: OpenAlgo, Kite Connect, Fenix
 2. Market Data: jugaad-data, Kite Connect historical API
 3. Backtesting: vectorbt, backtrader, existing SI-Trader backtesters
-4. Strategies: PKScreener patterns, algo_trading_strategies_india
-5. Parameter Catalogue: 30 parameters, weight total 100 (BRD compliant)
+4. Strategies: PKScreener patterns, algo_trading_strategies_india,
+   MA crossovers, AI/LLM generation, cash-settled index options
+5. Parameter Catalogue: 48 parameters, weight total 100 (BRD compliant)
 
 The hub provides:
 - Universal strategy ingestion (from any layer)
 - BRD-compliant validation (cost model, edge threshold, parameter weights)
 - Backtesting across multiple engines
+- Portfolio-level capital allocation
 - Paper trading pipeline (16 weeks, 5 compliance gates)
 - Live trading execution via broker adapters
 - Commercial platform readiness (multi-tenant, audit trail)
@@ -38,6 +40,18 @@ from ..config.parameter_catalogue import (
 )
 from ..config.indian_cost_model import IndianCostModel, get_cost_model
 from ..backtest.enhanced_backtester import Phase1Backtester
+from ..risk.portfolio_optimizer import PortfolioOptimizer
+
+# New strategy generation adapters
+from .ma_crossover_adapter import (
+    MACrossoverAdapter, get_ma_strategy_config, get_all_ma_strategies,
+)
+from .ai_strategy_generator import (
+    AIStrategyGenerator, StrategyIdea, StrategyGenerationResult,
+)
+from .options_strategy_adapter import (
+    OptionsStrategyAdapter, get_option_strategy_config, get_all_option_strategies,
+)
 
 # Integration layer imports
 try:
@@ -124,10 +138,15 @@ class HubConfig:
     market_data_manager: Optional[MarketDataManager] = None
     broker_adapter: Optional[BrokerAdapter] = None
     broker_platform: BrokerPlatform = BrokerPlatform.ZERODHA_KITE
+    llm_provider: str = "openai"
     enable_vectorbt: bool = True
     enable_backtrader: bool = True
     enable_pkscreener: bool = True
     enable_algo_india: bool = True
+    enable_ma_crossover: bool = True
+    enable_ai_strategy: bool = True
+    enable_options: bool = True
+    enable_portfolio_optimizer: bool = True
     min_edge_pct: float = 0.3
     cost_pct: float = 0.38
     max_positions: int = 10
@@ -163,7 +182,21 @@ class UniversalStrategyHub:
         
         self.pkscreener = PKScreenerAdapter() if self.config.enable_pkscreener else None
         self.algo_india = AlgoIndiaAdapter() if self.config.enable_algo_india else None
-        
+        self.ma_crossover = (
+            MACrossoverAdapter() if self.config.enable_ma_crossover else None
+        )
+        self.ai_generator = (
+            AIStrategyGenerator(llm_provider=self.config.llm_provider)
+            if self.config.enable_ai_strategy else None
+        )
+        self.options = (
+            OptionsStrategyAdapter() if self.config.enable_options else None
+        )
+        self.portfolio_optimizer = (
+            PortfolioOptimizer(capital=self.config.pilot_capital)
+            if self.config.enable_portfolio_optimizer else None
+        )
+
         self.vectorbt = VectorBTAdapter(
             initial_capital=self.config.pilot_capital,
         ) if self.config.enable_vectorbt else None
@@ -181,6 +214,21 @@ class UniversalStrategyHub:
         
         logger.info("Universal Strategy Hub initialized")
     
+    @staticmethod
+    def _normalise_selected_stocks(stocks: Any) -> List[str]:
+        """Accept selected_stocks as plain symbols or {"symbol": ...} dicts."""
+        if not stocks:
+            return []
+        out: List[str] = []
+        for s in stocks:
+            if isinstance(s, dict):
+                sym = s.get("symbol")
+                if sym:
+                    out.append(str(sym))
+            elif isinstance(s, str):
+                out.append(s)
+        return out
+
     def ingest_strategy(
         self,
         strategy_config: Dict[str, Any],
@@ -202,7 +250,8 @@ class UniversalStrategyHub:
             parameter_weights=weights,
             weight_total=weight_total,
             confidence=strategy_config.get("confidence", 50.0),
-            selected_stocks=[s.get("symbol", "") for s in strategy_config.get("selected_stocks", [])],
+            selected_stocks=self._normalise_selected_stocks(
+                strategy_config.get("selected_stocks", [])),
             risk_rules=strategy_config.get("risk_rules", {}),
             metadata={
                 "description": strategy_config.get("description", ""),
@@ -267,9 +316,206 @@ class UniversalStrategyHub:
             candidate = self.ingest_strategy(config, source="algo_india")
             candidate.confidence = strategy.confidence
             candidates.append(candidate)
-        
+
         return candidates
-    
+
+    # =========================================================================
+    # New strategy generation adapters (MA crossover, AI/LLM, options)
+    # =========================================================================
+
+    def ingest_ma_crossovers(
+        self,
+        strategy_names: Optional[List[str]] = None,
+    ) -> List[StrategyCandidate]:
+        """Ingest MA crossover strategies into the hub.
+
+        Args:
+            strategy_names: Specific strategies (e.g. ["MA5_MA10", "MA20_MA50"]).
+                           Defaults to all four (MA5/10, MA10/20, MA20/50, MA50/200).
+        """
+        if not self.ma_crossover:
+            logger.error("MA crossover adapter not enabled")
+            return []
+
+        names = strategy_names or list(self.ma_crossover.MA_STRATEGIES.keys())
+        candidates = []
+        for name in names:
+            try:
+                config = get_ma_strategy_config(name)
+                candidate = self.ingest_strategy(config, source="ma_crossover")
+                candidate.confidence = config.get("confidence", 75.0)
+                candidates.append(candidate)
+            except Exception as e:
+                logger.error(f"Failed to ingest MA crossover {name}: {e}")
+        return candidates
+
+    def ingest_ai_strategies(
+        self,
+        market_condition: str = "trending",
+        sector: str = "all",
+        time_horizon: str = "daily",
+        risk_tolerance: str = "medium",
+        num_ideas: int = 5,
+    ) -> List[StrategyCandidate]:
+        """Generate strategies with the LLM and ingest them.
+
+        Uses the configured LLM provider (10 supported) to produce strategy
+        ideas, converts each into parameter weights, then ingests them.
+        """
+        if not self.ai_generator:
+            logger.error("AI strategy generator not enabled")
+            return []
+
+        result = self.ai_generator.generate_strategy_ideas(
+            market_condition=market_condition,
+            sector=sector,
+            time_horizon=time_horizon,
+            risk_tolerance=risk_tolerance,
+            num_ideas=num_ideas,
+            capital=self.config.pilot_capital,
+        )
+
+        candidates = []
+        for config in self.ai_generator.generate_strategy_configs(result.ideas):
+            candidate = self.ingest_strategy(config, source="ai_llm")
+            candidate.confidence = config.get("confidence", 50.0)
+            candidate.metadata["llm_provider"] = self.config.llm_provider
+            candidate.metadata["market_condition"] = market_condition
+            candidate.metadata["risk_tolerance"] = risk_tolerance
+            candidates.append(candidate)
+        return candidates
+
+    def ingest_options_strategies(
+        self,
+        strategy_names: Optional[List[str]] = None,
+    ) -> List[StrategyCandidate]:
+        """Ingest cash-settled index options strategies.
+
+        Note: these are cash-settled (Nifty 50 / Bank Nifty) to stay within the
+        BRD delivery-only compliance boundary.
+        """
+        if not self.options:
+            logger.error("Options adapter not enabled")
+            return []
+
+        names = strategy_names or list(self.options.OPTION_STRATEGIES.keys())
+        candidates = []
+        for name in names:
+            try:
+                config = get_option_strategy_config(name)
+                candidate = self.ingest_strategy(config, source="options")
+                candidate.confidence = 65.0
+                candidate.metadata["cash_settled"] = True
+                candidate.metadata["suitable_condition"] = config.get(
+                    "suitable_market_condition")
+                candidates.append(candidate)
+            except Exception as e:
+                logger.error(f"Failed to ingest options strategy {name}: {e}")
+        return candidates
+
+    def ingest_all_strategy_sources(
+        self,
+        symbols: Optional[List[str]] = None,
+        market_condition: str = "trending",
+        risk_tolerance: str = "medium",
+    ) -> Dict[str, List[StrategyCandidate]]:
+        """Ingest from every enabled strategy source at once.
+
+        Returns a dict of source name -> list of candidates ingested.
+        """
+        symbols = symbols or ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
+        out: Dict[str, List[StrategyCandidate]] = {}
+
+        try:
+            out["ma_crossover"] = self.ingest_ma_crossovers()
+        except Exception as e:
+            logger.error(f"ma_crossover ingestion failed: {e}")
+            out["ma_crossover"] = []
+
+        try:
+            out["ai_llm"] = self.ingest_ai_strategies(
+                market_condition=market_condition,
+                risk_tolerance=risk_tolerance,
+            )
+        except Exception as e:
+            logger.error(f"ai_llm ingestion failed: {e}")
+            out["ai_llm"] = []
+
+        try:
+            out["options"] = self.ingest_options_strategies()
+        except Exception as e:
+            logger.error(f"options ingestion failed: {e}")
+            out["options"] = []
+
+        try:
+            out["pkscreener"] = self.ingest_pkscreener_signals(symbols)
+        except Exception as e:
+            logger.error(f"pkscreener ingestion failed: {e}")
+            out["pkscreener"] = []
+
+        try:
+            out["algo_india"] = self.ingest_algo_india_strategies()
+        except Exception as e:
+            logger.error(f"algo_india ingestion failed: {e}")
+            out["algo_india"] = []
+
+        return out
+
+    def optimize_portfolio(
+        self,
+        candidate_names: Optional[List[str]] = None,
+        expected_returns: Optional[Dict[str, float]] = None,
+        expected_volatilities: Optional[Dict[str, float]] = None,
+        max_strategies: int = 5,
+    ) -> Dict[str, Any]:
+        """Allocate capital across candidates using the portfolio optimizer.
+
+        Returns a report with per-strategy allocation and portfolio metrics.
+        """
+        if not self.portfolio_optimizer:
+            logger.error("Portfolio optimizer not enabled")
+            return {}
+
+        pool = (self.selected_strategies or self.strategy_candidates)
+        if candidate_names:
+            pool = [c for c in pool if c.name in candidate_names]
+
+        configs = [{
+            "strategy_name": c.name,
+            "strategy_type": c.strategy_type,
+            "weight_total": c.weight_total,
+            "delivery_compatible": True,
+            "confidence": c.confidence,
+        } for c in pool]
+
+        result = self.portfolio_optimizer.optimize_portfolio(
+            strategies=configs,
+            expected_returns=expected_returns,
+            expected_volatilities=expected_volatilities,
+            max_strategies=max_strategies,
+        )
+
+        self._audit("optimize_portfolio", f"{len(pool)} strategies", "hub", {
+            "brd_compliant": result.brd_compliant,
+            "total_allocated": result.total_allocated,
+        })
+
+        return {
+            "total_capital": result.total_capital,
+            "total_allocated": result.total_allocated,
+            "cash_remaining": result.cash_remaining,
+            "cash_pct": result.cash_pct,
+            "brd_compliant": result.brd_compliant,
+            "portfolio_metrics": result.portfolio_metrics,
+            "allocations": [{
+                "strategy_name": a.strategy_name,
+                "strategy_type": a.strategy_type,
+                "weight_pct": a.weight_pct,
+                "capital_allocated": a.capital_allocated,
+                "max_position_pct": a.max_position_pct,
+            } for a in result.strategies],
+        }
+
     def backtest_candidate(
         self,
         candidate: StrategyCandidate,
@@ -570,14 +816,27 @@ class UniversalStrategyHub:
             "backtrader_available": self.backtrader.is_available() if self.backtrader else False,
             "pkscreener_available": self.pkscreener.is_available() if self.pkscreener else False,
             "algo_india_available": self.algo_india.is_available() if self.algo_india else False,
+            "ma_crossover_available": self.ma_crossover is not None,
+            "ai_strategy_available": self.ai_generator is not None,
+            "options_available": self.options is not None,
+            "portfolio_optimizer_available": self.portfolio_optimizer is not None,
             "market_data_jugaad": self.market_data.jugaad.is_available(),
             "broker_connected": self.broker_adapter.is_connected() if self.broker_adapter else False,
             "commercial_mode": self.config.commercial_mode,
             "cost_pct": self.config.cost_pct,
             "min_edge_pct": self.config.min_edge_pct,
             "pilot_capital": self.config.pilot_capital,
+            "llm_provider": self.config.llm_provider,
+            "candidates_by_source": self._count_by_source(),
         }
     
+    def _count_by_source(self) -> Dict[str, int]:
+        """Count ingested candidates grouped by source."""
+        counts: Dict[str, int] = {}
+        for c in self.strategy_candidates:
+            counts[c.source] = counts.get(c.source, 0) + 1
+        return counts
+
     def list_candidates(self) -> List[Dict[str, Any]]:
         return [
             {

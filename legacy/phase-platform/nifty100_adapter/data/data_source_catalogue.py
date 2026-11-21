@@ -421,6 +421,11 @@ PARAMETER_TO_DATA_SOURCE: Dict[str, DataSourceConfig] = {
 
     # --- Valuation Parameters ---
     "pe_ratio_vs_sector": DATA_SOURCES["nse_fundamentals"],
+    "roe_trend": DATA_SOURCES["nse_fundamentals"],
+    "earnings_trend": DATA_SOURCES["nse_fundamentals"],
+    "debt_equity_ratio": DATA_SOURCES["nse_fundamentals"],
+    "interest_coverage": DATA_SOURCES["nse_fundamentals"],
+    "cash_flow_positive": DATA_SOURCES["nse_financial_statements"],
 
     # --- Shareholding Parameters ---
     "promoter_holding_pct": DATA_SOURCES["nse_shareholding"],
@@ -438,6 +443,11 @@ PARAMETER_TO_DATA_SOURCE: Dict[str, DataSourceConfig] = {
 
     # --- Sentiment ---
     "historical_news_sentiment": DATA_SOURCES["news_sentiment_api"],
+    "industry_expectations": DATA_SOURCES["broker_research_api"],
+    "bulk_block_deals": DATA_SOURCES["nse_corporate_actions"],
+
+    # --- Cost / Broker Pricing ---
+    "brokerage_rate_param": DATA_SOURCES["broker_api_rates"],
 
     # --- SWOT & Competition ---
     "swot_analytics": DATA_SOURCES["nse_financial_statements"],  # Uses financial data for SWOT

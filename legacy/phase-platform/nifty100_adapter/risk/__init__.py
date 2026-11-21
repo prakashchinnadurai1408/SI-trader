@@ -12,6 +12,7 @@ auto-investing platform:
 - KillSwitchManager: Emergency kill switch for weekly/daily loss limits
 - ExecutionPipeline: Complete order execution pipeline with risk checking
 - DailyChecklist: 14-item pre-market checklist per BRD Section 20
+- PortfolioOptimizer: Portfolio-level strategy allocation & risk management
 
 BRD Compliance:
 - Section 14: Paper trading default, kill switch, compliance gates
@@ -25,6 +26,7 @@ from .stop_target_engine import StopTargetEngine, StopTargetConfig, StopTargetRe
 from .kill_switch import ComplianceGateEnforcer, KillSwitchManager, ComplianceGate, KillSwitchEvent
 from .execution_pipeline import OrderExecutionPipeline, ExecutionResult
 from .daily_checklist import DailyChecklist, ChecklistItem
+from .portfolio_optimizer import PortfolioOptimizer, PortfolioOptimizationResult, StrategyAllocation
 
 __all__ = [
     # Budget Manager
@@ -50,4 +52,9 @@ __all__ = [
     # Daily Checklist
     "DailyChecklist",
     "ChecklistItem",
+    
+    # Portfolio Optimization
+    "PortfolioOptimizer",
+    "PortfolioOptimizationResult",
+    "StrategyAllocation",
 ]

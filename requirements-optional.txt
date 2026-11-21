@@ -1,0 +1,42 @@
+# SI-Trader optional integrations
+#
+# Core platform (see requirements.txt) runs on numpy/pandas/cryptography only.
+# Every module below degrades gracefully with a clear log message when its
+# dependency is missing, so these can be installed selectively.
+#
+#   pip install -r requirements-optional.txt
+
+# --- Broker gateways -------------------------------------------------------
+# HTTP clients used by the OpenAlgo and Fenix adapters
+requests>=2.31,<3
+
+# Zerodha Kite Connect official SDK
+kiteconnect>=5.0,<6
+
+# --- Market data -----------------------------------------------------------
+# Async NSE price history (nse_price_adapter)
+aiohttp>=3.9,<4
+
+# Free NSE/BSE/RBI market data (jugaad_data_adapter)
+jugaad-data>=0.1.0
+
+# Yahoo Finance fallback source
+yfinance>=0.2,<1
+
+# External Indian strategy library (algo_india_adapter)
+# Source: https://github.com/buzzsubash/algo_trading_strategies_india
+# If unavailable on PyPI, the adapter falls back to built-in strategy templates.
+algo-trading-strategies-india>=0.1.0
+
+# --- Backtesting engines ---------------------------------------------------
+# Vectorised parameter sweeps (vectorbt_adapter)
+vectorbt>=0.26,<1
+
+# Event-driven backtesting (backtrader_adapter)
+backtrader>=1.9,<2
+
+# --- Research (optional ML/RL pipelines) ------------------------------------
+# Microsoft Qlib
+# qlib>=0.9
+# FinRL
+# finrl>=0.3

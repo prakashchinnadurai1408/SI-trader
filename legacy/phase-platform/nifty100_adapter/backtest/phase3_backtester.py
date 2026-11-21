@@ -189,28 +189,42 @@ class Phase3Backtester:
             uni_df = uni_df[uni_df["pe_ratio_vs_sector"] > 0].copy()  # placeholder
 
             # Step 4: Weighted score calculation
+            # Score every surviving stock with the BRD parameter catalogue
+            # (Section 27.5). Veto values disqualify, failed filters are
+            # penalised, in-range Score parameters add their weight.
+            scoring_params = [
+                {"parameter_key": "price_momentum_weekly", "weight": 15,
+                 "role_type": RoleType.SCORE, "min_value": None, "max_value": 100},
+                {"parameter_key": "debt_equity_ratio", "weight": 10,
+                 "role_type": RoleType.FILTER, "min_value": 0, "max_value": 2.0},
+                {"parameter_key": "roe_trend", "weight": 8,
+                 "role_type": RoleType.SCORE, "min_value": 0, "max_value": 50},
+                {"parameter_key": "promoter_pledging_pct", "weight": 10,
+                 "role_type": RoleType.VETO, "min_value": 0, "max_value": 25},
+            ]
+
             for idx, row in uni_df.iterrows():
                 score = 0.0
-                for param in [p for p in [{"parameter_key": "price_momentum_weekly", "weight": 15, "role_type": RoleType.SCORE},
-                                            {"parameter_key": "debt_equity_ratio", "weight": 10, "role_type": RoleType.FILTER},
-                                            {"parameter_key": "roe_trend", "weight": 8, "role_type": RoleType.SCORE},
-                                            {"parameter_key": "promoter_pledging_pct", "weight": 10, "role_type": RoleType.VETO}
-                                            if hasattr(param, 'parameter_key')]:
-                    # Simple scoring: if value is in reasonable range, add weight
-                    val = row.get(param["parameter_key"], 0)
-                    if param["role_type"] == RoleType.SCORE and val is not None:
-                        if param.get("min_value") and val < param["min_value"]:
+                for param in scoring_params:
+                    key = param["parameter_key"]
+                    if key not in row or row[key] is None or pd.isna(row[key]):
+                        continue
+                    val = float(row[key])
+                    role = param["role_type"]
+                    if role == RoleType.SCORE:
+                        vmin, vmax = param.get("min_value"), param.get("max_value")
+                        if vmin is not None and val < vmin:
                             continue
-                        if param.get("max_value") and val > param["max_value"]:
+                        if vmax is not None and val > vmax:
                             continue
                         score += param["weight"]
-                    elif param["role_type"] == RoleType.FILTER and val is not None:
-                        if val < param.get("min_value", 0):
+                    elif role == RoleType.FILTER:
+                        if val < (param.get("min_value") or 0):
                             score -= 5  # Penalty for failing filter
-                    elif param["role_type"] == RoleType.VETO and val is not None:
-                        if val > param.get("max_value", 50):
+                    elif role == RoleType.VETO:
+                        if val > (param.get("max_value") or 50):
                             score = -10  # Veto - disqualify
-                row["raw_score"] = max(0, score)  # Ensure non-negative
+                uni_df.at[idx, "raw_score"] = max(0, score)
 
             # Step 5: Cost-and-tax edge check
             edge_passed = []

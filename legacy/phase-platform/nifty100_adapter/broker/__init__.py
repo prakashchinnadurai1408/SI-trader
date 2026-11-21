@@ -1,45 +1,35 @@
 """Broker module for SI-Trader.
 
-Provides broker connectivity adapters:
-
-- openalgo_adapter: OpenAlgo multi-broker gateway (AGPL v3.0)
-- kite_connect_adapter: Zerodha Kite Connect official SDK
-- fenix_adapter: Fenix lightweight multi-broker (15+ brokers)
-
-All adapters implement the BrokerAdapter base class with standardised
-OrderRequest/OrderResponse types for interoperability.
+Exposes the shared core types (``_init_``) plus broker gateway adapters:
+OpenAlgo (multi-broker, AGPL v3.0), Kite Connect (Zerodha official) and
+Fenix (15+ brokers). Adapters import lazily-safe so a missing optional
+dependency never breaks the core types.
 """
 
 from ._init_ import (
-    BrokerConfig,
-    OrderRequest,
-    OrderResponse,
-    OrderSide,
-    OrderType,
-    ProductType,
-    OrderStatus,
-    BrokerPlatform,
-    BrokerAdapter,
-    Position,
-    PortfolioSnapshot,
+    OrderSide, OrderType, ProductType, OrderStatus, BrokerPlatform,
+    BrokerConfig, OrderRequest, OrderResponse, Position,
+    PortfolioSnapshot, BrokerAdapter,
 )
-from .openalgo_adapter import OpenAlgoAdapter
-from .kite_connect_adapter import KiteConnectAdapter
-from .fenix_adapter import FenixAdapter
+
+try:
+    from .openalgo_adapter import OpenAlgoAdapter
+except Exception:  # pragma: no cover - optional dependency
+    OpenAlgoAdapter = None
+
+try:
+    from .kite_connect_adapter import KiteConnectAdapter
+except Exception:  # pragma: no cover - optional dependency
+    KiteConnectAdapter = None
+
+try:
+    from .fenix_adapter import FenixAdapter
+except Exception:  # pragma: no cover - optional dependency
+    FenixAdapter = None
 
 __all__ = [
-    "BrokerConfig",
-    "OrderRequest",
-    "OrderResponse",
-    "OrderSide",
-    "OrderType",
-    "ProductType",
-    "OrderStatus",
-    "BrokerPlatform",
-    "BrokerAdapter",
-    "Position",
-    "PortfolioSnapshot",
-    "OpenAlgoAdapter",
-    "KiteConnectAdapter",
-    "FenixAdapter",
+    "OrderSide", "OrderType", "ProductType", "OrderStatus", "BrokerPlatform",
+    "BrokerConfig", "OrderRequest", "OrderResponse", "Position",
+    "PortfolioSnapshot", "BrokerAdapter",
+    "OpenAlgoAdapter", "KiteConnectAdapter", "FenixAdapter",
 ]

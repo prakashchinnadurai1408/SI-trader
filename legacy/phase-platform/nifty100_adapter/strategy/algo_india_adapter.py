@@ -18,6 +18,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from ._weight_utils import normalize_weights
+
+
 
 @dataclass
 class AlgoIndiaStrategy:
@@ -252,51 +255,22 @@ class AlgoIndiaAdapter:
         Total weight must equal 100.
         """
         if base_weights is None:
+            from ..config.parameter_catalogue import PARAMETER_CATALOGUE
             base_weights = {
-                "price_momentum_weekly": 1,
-                "price_momentum_monthly": 2,
-                "price_momentum_yearly": 2,
-                "f_score": 1,
-                "altman_z_score": 1,
-                "pe_ratio_vs_sector": 4,
-                "roe_trend": 4,
-                "earnings_trend": 4,
-                "fii_dii_mf_trend": 3,
-                "midcap_liquidity_score": 4,
-                "midcap_fii_mf_trend": 3,
-                "historical_news_sentiment": 4,
-                "swot_analytics": 3,
-                "competitive_plans": 5,
-                "promoter_holding_pct": 4,
-                "debt_equity_ratio": 3,
-                "interest_coverage": 3,
-                "cash_flow_positive": 3,
-                "promoter_pledging_pct": 3,
-                "liquidity_floor": 5,
-                "cost_vs_edge_check": 5,
-                "stt_rate_equity": 3,
-                "stcg_tax_rate": 3,
-                "brokerage_rate": 4,
-                "midcap_volatility_adj": 3,
-                "midcap_corp_action": 3,
-                "international_war_situation": 3,
-                "industry_expectations": 3,
-                "legal_cases_directors": 6,
-                "credit_rating_changes": 5,
+                k: p.weight for k, p in PARAMETER_CATALOGUE.items()
+                if p.enable_switch
             }
-        
-        adjusted = base_weights.copy()
-        
+
+        adjusted = dict(base_weights)
+
         strategy_adjustments = {
             "breakout": {
                 "price_momentum_weekly": 2,
-                "price_momentum_monthly": 1,
                 "historical_news_sentiment": 1,
                 "midcap_liquidity_score": 1,
             },
             "momentum": {
                 "price_momentum_weekly": 2,
-                "price_momentum_monthly": 1,
                 "fii_dii_mf_trend": 1,
                 "roe_trend": 1,
             },
@@ -307,29 +281,22 @@ class AlgoIndiaAdapter:
                 "midcap_volatility_adj": 1,
             },
         }
-        
+
         adjustments = strategy_adjustments.get(strategy.strategy_type, {})
-        confidence_factor = strategy.confidence / 100.0
-        
+        confidence_factor = (strategy.confidence or 0) / 100.0
+
         for param, delta in adjustments.items():
             if param in adjusted:
-                adjusted[param] = max(1, adjusted[param] + int(delta * confidence_factor))
-        
+                adjusted[param] = max(
+                    1, adjusted[param] + int(round(delta * confidence_factor)))
+
         if strategy.risk_rules.get("max_position_pct", 10) <= 8:
-            adjusted["liquidity_floor"] = max(1, adjusted.get("liquidity_floor", 5) + 1)
-            adjusted["cost_vs_edge_check"] = max(1, adjusted.get("cost_vs_edge_check", 5) + 1)
-        
-        total = sum(adjusted.values())
-        if total != 100:
-            scale = 100 / total
-            adjusted = {k: max(1, round(v * scale)) for k, v in adjusted.items()}
-            current_total = sum(adjusted.values())
-            diff = 100 - current_total
-            if diff != 0:
-                first_key = list(adjusted.keys())[0]
-                adjusted[first_key] = max(1, adjusted[first_key] + diff)
-        
-        return adjusted
+            adjusted["liquidity_floor"] = max(
+                1, adjusted.get("liquidity_floor", 5) + 1)
+            adjusted["cost_vs_edge_check"] = max(
+                1, adjusted.get("cost_vs_edge_check", 5) + 1)
+
+        return normalize_weights(adjusted)
     
     def generate_strategy_config(
         self,

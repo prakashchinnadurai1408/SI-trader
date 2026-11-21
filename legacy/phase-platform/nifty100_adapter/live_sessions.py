@@ -4,6 +4,8 @@ BRD Section 28: Live session management using curriculum module IDs.
 Live sessions for an uploaded curriculum use module ID `curriculum:<id>`.
 Reuses the module live-session feature and resolves the curriculum's trainer.
 """
+from __future__ import annotations
+
 
 from enum import Enum
 import json
