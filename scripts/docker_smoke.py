@@ -1,5 +1,6 @@
 """Exercise the built Linux image with disposable credentials and storage."""
 import json
+import http.client
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,8 +34,9 @@ with tempfile.TemporaryDirectory() as folder:
                 with urlopen(Request(base + "/healthz", headers={"Host": "127.0.0.1:8080"}), timeout=2) as response:
                     assert json.load(response)["status"] == "ok"
                 break
-            except (URLError, TimeoutError):
+            except (URLError, OSError, http.client.HTTPException):
                 if attempt == 29:
+                    subprocess.run(["docker", "logs", "--tail", "40", name], check=False)
                     raise
                 time.sleep(0.5)
         request = Request(base + "/api/broker", data=b"{}", headers={"Host": "trader.example", "Origin": "https://trader.example", "Content-Type": "application/json"})
