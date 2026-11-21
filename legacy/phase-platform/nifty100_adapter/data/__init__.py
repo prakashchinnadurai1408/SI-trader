@@ -26,7 +26,7 @@ missing the adapter still imports and reports itself unavailable, so importing
 `nifty100_adapter.data` never fails.
 """
 
-from typing import Any
+from typing import Any, List
 
 
 def _optional(name: str, attrs: List[str]) -> Any:
@@ -40,8 +40,6 @@ def _optional(name: str, attrs: List[str]) -> Any:
             "data.%s unavailable (%s); related adapters disabled", name, exc)
         return tuple(None for _ in attrs)
 
-
-from typing import List  # noqa: E402  (used by _optional)
 
 (NSEPriceAdapter, PriceData, MomentumScore) = _optional(
     "nse_price_adapter", ["NSEPriceAdapter", "PriceData", "MomentumScore"])
