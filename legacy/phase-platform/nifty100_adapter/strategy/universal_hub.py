@@ -145,6 +145,7 @@ class HubConfig:
     broker_adapter: Optional[BrokerAdapter] = None
     broker_platform: BrokerPlatform = BrokerPlatform.ZERODHA_KITE
     llm_provider: str = "openai"
+    value_store: Optional[Any] = None  # ParameterValueStore
     enable_vectorbt: bool = True
     enable_backtrader: bool = True
     enable_pkscreener: bool = True
@@ -182,6 +183,7 @@ class UniversalStrategyHub:
     def __init__(self, config: Optional[HubConfig] = None):
         self.config = config or HubConfig()
         self.cost_model = get_cost_model()
+        self.value_store = self.config.value_store
         
         self.market_data = self.config.market_data_manager or MarketDataManager()
         self.broker_adapter = self.config.broker_adapter
@@ -524,6 +526,50 @@ class UniversalStrategyHub:
             } for a in result.strategies],
         }
 
+    def build_trading_plan(
+        self,
+        candidate_names: Optional[List[str]] = None,
+        prices: Optional[Dict[str, float]] = None,
+        cash: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Size the selected strategies into a reviewable order plan.
+
+        Stops and targets come from each candidate's exit rules; share counts
+        come from the four-limit BudgetManager. Nothing is placed here.
+        """
+        from .execution_bridge import StrategyExecutionBridge
+
+        pool = self.selected_strategies or self.strategy_candidates
+        if candidate_names:
+            pool = [c for c in pool if c.name in candidate_names]
+        if not pool:
+            return {"tradable": False,
+                    "blocked_reason": "no candidates selected"}
+
+        prices = prices or {s: 0.0 for c in pool
+                            for s in (c.selected_stocks or [])}
+        bridge = StrategyExecutionBridge(top_n=self.config.max_positions)
+
+        # Derive entry prices from the market data layer when they are absent.
+        missing = [s for s in prices if not prices.get(s)]
+        for symbol in missing:
+            quote = None
+            getter = getattr(self.market_data, "get_quote", None)
+            if callable(getter):
+                try:
+                    quote = getter(symbol)
+                except Exception:
+                    quote = None
+            if isinstance(quote, dict) and quote.get("price"):
+                prices[symbol] = float(quote["price"])
+                continue
+            self._audit("plan_no_price", symbol, "hub", {})
+
+        plan = bridge.build_plan(pool, prices, cash)
+        self._audit("build_trading_plan", f"{len(pool)} strategies", "hub",
+                    {"orders": len(plan.orders)})
+        return plan.as_dict()
+
     def backtest_candidate(
         self,
         candidate: StrategyCandidate,
@@ -583,7 +629,8 @@ class UniversalStrategyHub:
             series = {str(k): list(v) for k, v in dict(price_data).items()}
 
         backtester = StrategyBacktester(
-            capital=self.config.pilot_capital, top_n=self.config.max_positions)
+            capital=self.config.pilot_capital, top_n=self.config.max_positions,
+            value_store=self.value_store)
         return backtester.run_candidate(candidate, series)
 
     def _generate_signals_from_weights(
@@ -872,49 +919,34 @@ class UniversalStrategyHub:
             "candidates_by_source": self._count_by_source(),
         }
     
-    def build_trading_plan(
+    def collect_parameter_values(
         self,
-        candidate_names: Optional[List[str]] = None,
-        prices: Optional[Dict[str, float]] = None,
-        cash: Optional[float] = None,
+        symbols: Optional[List[str]] = None,
+        bars_by_symbol: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Size the selected strategies into a reviewable order plan.
+        """Collect data-pipeline values into the hub's ParameterValueStore.
 
-        Stops and targets come from each candidate's exit rules; share counts
-        come from the four-limit BudgetManager. Nothing is placed here.
+        This is the first call that produces real output from the 48-parameter
+        data ecosystem: fetched values with provenance plus an honest coverage
+        report. Parameters whose feed is not connected are reported as
+        unavailable instead of being filled with neutral defaults.
         """
-        from .execution_bridge import StrategyExecutionBridge
+        from ..data.parameter_store import ParameterValueStore
+        from ..data.pipeline_orchestrator import (
+            collect_parameter_values as _collect)
 
-        pool = self.selected_strategies or self.strategy_candidates
-        if candidate_names:
-            pool = [c for c in pool if c.name in candidate_names]
-        if not pool:
-            return {"tradable": False,
-                    "blocked_reason": "no candidates selected"}
+        symbols = symbols or sorted({
+            s for c in self.strategy_candidates
+            for s in (c.selected_stocks or [])})
+        result = _collect(symbols, bars_by_symbol=bars_by_symbol)
+        self.value_store = result.pop("store", None) or ParameterValueStore()
+        return result
 
-        prices = prices or {s: 0.0 for c in pool
-                            for s in (c.selected_stocks or [])}
-        bridge = StrategyExecutionBridge(top_n=self.config.max_positions)
-
-        # Derive entry prices from the market data layer when they are absent.
-        missing = [s for s in prices if not prices.get(s)]
-        for symbol in missing:
-            quote = None
-            getter = getattr(self.market_data, "get_quote", None)
-            if callable(getter):
-                try:
-                    quote = getter(symbol)
-                except Exception:
-                    quote = None
-            if isinstance(quote, dict) and quote.get("price"):
-                prices[symbol] = float(quote["price"])
-                continue
-            self._audit("plan_no_price", symbol, "hub", {})
-
-        plan = bridge.build_plan(pool, prices, cash)
-        self._audit("build_trading_plan", f"{len(pool)} strategies", "hub",
-                    {"orders": len(plan.orders)})
-        return plan.as_dict()
+    def parameter_coverage(self) -> Dict[str, Any]:
+        """Coverage of the 48-parameter catalogue by fetched values."""
+        from ..data.parameter_store import ParameterValueStore
+        store = self.value_store or ParameterValueStore()
+        return store.coverage()
 
     def execute_trading_plan(self, plan_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a plan previously produced by build_trading_plan()."""

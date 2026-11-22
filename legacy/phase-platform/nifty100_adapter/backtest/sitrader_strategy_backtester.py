@@ -82,7 +82,7 @@ class StrategyBacktester:
     }
 
     def __init__(self, cost_model=None, capital: float = 25000.0,
-                 top_n: int = 5, min_bars: int = 30):
+                 top_n: int = 5, min_bars: int = 30, value_store=None):
         if cost_model is None:
             from ..config.indian_cost_model import get_cost_model
             cost_model = get_cost_model()
@@ -90,14 +90,38 @@ class StrategyBacktester:
         self.capital = capital
         self.top_n = top_n
         self.min_bars = min_bars
+        # Optional ParameterValueStore: values already fetched by the data
+        # pipeline take precedence over re-deriving from bars. Only observed
+        # values are ever used, so unobserved parameters are skipped.
+        self.value_store = value_store
+
+    def _features(self, bars, end):
+        """Feature values at bar index `end`.
+
+        Stored values win over on-bar derivation; anything still missing is
+        computed from the price series as before.
+        """
+        features = dict(self._price_features(bars, end))
+        if self.value_store is None:
+            return features
+        # Stored values are recorded per symbol, not per bar, so they apply to
+        # the most recent bar only.
+        if end < len(bars) - 1:
+            return features
+        symbol = bars[end].get("symbol") or "_single"
+        for key in list(features):
+            value = self.value_store.usable(key, symbol)
+            if value is not None:
+                features[key] = value
+        return features
 
     # ------------------------------------------------------------------
     # Feature extraction
     # ------------------------------------------------------------------
 
-    def _features(self, bars: Sequence[Dict[str, Any]],
-                  end: int) -> Dict[str, float]:
-        """Raw feature values observable at bar index `end` (0-based close)."""
+    def _price_features(self, bars: Sequence[Dict[str, Any]],
+                        end: int) -> Dict[str, float]:
+        """Raw feature values observable from price/volume at bar `end`."""
         closes = [float(b["close"]) for b in bars[: end + 1]]
         vols = [float(b.get("volume", 0)) for b in bars[: end + 1]]
         n = len(closes)
@@ -112,9 +136,7 @@ class StrategyBacktester:
             return None
 
         for key, lookback in self.PRICE_DERIVED.items():
-            if key == "midcap_volatility_adj":
-                continue
-            if key == "midcap_liquidity_score":
+            if key == "midcap_volatility_adj" or key == "midcap_liquidity_score":
                 continue
             if key == "liquidity_floor":
                 out[key] = vols[-1] * last
@@ -123,7 +145,6 @@ class StrategyBacktester:
             if value is not None:
                 out[key] = value
 
-        # realised volatility over the last 21 bars
         window = closes[-22:]
         rets = [math.log(window[i] / window[i - 1])
                 for i in range(1, len(window)) if window[i - 1] > 0]
@@ -132,7 +153,6 @@ class StrategyBacktester:
             var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
             out["midcap_volatility_adj"] = math.sqrt(var) * math.sqrt(252) * 100
 
-        # liquidity: 21-day mean turnover in rupees
         window = closes[-21:]
         vwindow = vols[-21:]
         if window:

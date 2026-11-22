@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Callable
 import importlib
+import inspect
 from datetime import datetime, timedelta
 import logging
 import asyncio
@@ -331,6 +332,89 @@ DEFAULT_ADAPTER_SPECS = [
         "auditor_resignations", "bulk_block_deals",
     ]),
 ]
+
+
+def _call_fetcher(fetcher, symbols, bars_by_symbol):
+    """Call fetcher(symbols[, bars_by_symbol]) depending on its signature."""
+    try:
+        params = inspect.signature(fetcher).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if bars_by_symbol is not None and "bars_by_symbol" in params:
+        return fetcher(symbols, bars_by_symbol=bars_by_symbol)
+    if bars_by_symbol is not None and len(params) >= 2:
+        return fetcher(symbols, bars_by_symbol)
+    return fetcher(symbols)
+
+
+def populate_store(orchestrator, symbols: List[str], store=None,
+                   bars_by_symbol: Optional[Dict[str, Any]] = None
+                   ) -> Dict[str, Any]:
+        """Collect parameter values from every adapter into a store.
+
+        Adapters that expose `fetch_parameter_values()` contribute observed
+        values; the rest are marked unavailable with the reason, so the store
+        reports honest coverage instead of inventing data.
+        """
+        from .parameter_store import ParameterValueStore
+
+        store = store or ParameterValueStore()
+        collected, unavailable, reasons = [], [], {}
+
+        for name, adapter in orchestrator.adapters.items():
+            params = orchestrator.adapter_parameters.get(name, [])
+            fetcher = getattr(adapter, "fetch_parameter_values", None)
+            schedule = orchestrator.adapter_schedules.get(name, "daily")
+            if not callable(fetcher):
+                for key in params:
+                    store.mark_unavailable(key, f"{name}: no fetch_parameter_values()",
+                                           schedule)
+                    unavailable.append(key)
+                continue
+            try:
+                result = _call_fetcher(fetcher, symbols, bars_by_symbol)
+            except Exception as exc:
+                for key in params:
+                    store.mark_unavailable(key, f"{name}: {exc}", schedule)
+                    unavailable.append(key)
+                continue
+
+            observed = result.get("observed", []) or []
+            missing = result.get("unavailable", []) or []
+            source = result.get("source", name)
+            for key in observed:
+                per_symbol = result.get("parameters", {}).get(key, {})
+                store.set_schedule(key, schedule)
+                for sym, value in per_symbol.items():
+                    store.record(key, sym, value, source, observed=True)
+                collected.append(key)
+            for key in missing or [k for k in params if k not in observed]:
+                if key not in observed:
+                    store.mark_unavailable(key, f"{source}: value not returned",
+                                           schedule)
+                    unavailable.append(key)
+
+        coverage = store.coverage()
+        return {
+            "store": store,
+            "collected": sorted(set(collected)),
+            "unavailable": sorted(set(unavailable)),
+            "coverage": coverage,
+            "symbols": symbols,
+        }
+
+
+def collect_parameter_values(symbols: List[str], store=None,
+                             bars_by_symbol: Optional[Dict[str, Any]] = None
+                             ) -> Dict[str, Any]:
+    """Build the default pipeline and collect all available values into a store.
+
+    This is the first call that produces a real output from the data
+    ecosystem: parameter values with provenance, plus an honest coverage
+    report over the 48-parameter catalogue.
+    """
+    orchestrator = build_default_pipeline()
+    return populate_store(orchestrator, symbols, store, bars_by_symbol)
 
 
 def build_default_pipeline(

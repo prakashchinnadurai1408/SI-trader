@@ -616,5 +616,170 @@ class ExecutionBridgeTests(unittest.TestCase):
             self.assertLessEqual(o.position_value, 1800.0 + 1e-9)
 
 
+class ParameterValueStoreTests(unittest.TestCase):
+    """The 48-parameter stores must record honest, fresh values."""
+
+    @classmethod
+    def setUpClass(cls):
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        cls.store = ParameterValueStore()
+
+    def _bars(self, symbol, n=40, drift=0.002):
+        import random
+        rng = random.Random(hash(symbol) % 1000)
+        price = 100.0
+        out = []
+        for _ in range(n):
+            price *= 1 + drift + rng.gauss(0, 0.012)
+            out.append({"symbol": symbol, "close": round(price, 2),
+                        "volume": 100000})
+        return out
+
+    def test_record_and_read_back(self):
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        store = ParameterValueStore()
+        store.record("price_momentum_weekly", "RELIANCE", 3.05,
+                     "NSE Price History", observed=True)
+        value = store.get("price_momentum_weekly", "RELIANCE")
+        self.assertIsNotNone(value)
+        self.assertEqual(value.value, 3.05)
+        self.assertTrue(value.observed)
+        self.assertEqual(store.usable("price_momentum_weekly", "RELIANCE"), 3.05)
+
+    def test_unknown_symbol_returns_none(self):
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        store = ParameterValueStore()
+        self.assertIsNone(store.usable("f_score", "RELIANCE"))
+        self.assertIsNone(store.get("f_score", "RELIANCE"))
+
+    def test_unavailable_is_reported_not_fabricated(self):
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        store = ParameterValueStore()
+        store.mark_unavailable("f_score", "no feed configured")
+        cov = store.coverage(["f_score"])
+        self.assertEqual(cov["available_count"], 0)
+        self.assertEqual(cov["missing_count"], 1)
+        self.assertEqual(cov["reasons"]["f_score"], "no feed configured")
+
+    def test_coverage_covers_all_48_catalogue_parameters(self):
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        store = ParameterValueStore()
+        cov = store.coverage()
+        self.assertEqual(cov["total_parameters"], 48)
+
+    def test_stale_values_are_not_usable(self):
+        from datetime import datetime, timedelta
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        store = ParameterValueStore()
+        store.set_schedule("price_momentum_weekly", "weekly")
+        old = (datetime.now() - timedelta(days=30)).isoformat()
+        store.record("price_momentum_weekly", "RELIANCE", 5.0,
+                     "NSE Price History", observed=True, as_of=old)
+        self.assertIsNone(store.usable("price_momentum_weekly", "RELIANCE"))
+        fresh = (datetime.now() - timedelta(days=2)).isoformat()
+        store.record("price_momentum_weekly", "TCS", 4.0,
+                     "NSE Price History", observed=True, as_of=fresh)
+        self.assertEqual(store.usable("price_momentum_weekly", "TCS"), 4.0)
+
+
+class PriceAdapterValueTests(unittest.TestCase):
+    """Price-derived parameters must be observable without any network."""
+
+    def test_fetch_from_supplied_bars_is_observed(self):
+        import random
+        from nifty100_adapter.data.nse_price_adapter import NSEPriceAdapter
+        rng = random.Random(11)
+        bars = []
+        price = 100.0
+        for _ in range(40):
+            price *= 1 + 0.002 + rng.gauss(0, 0.012)
+            bars.append({"symbol": "RELIANCE", "close": round(price, 2),
+                         "volume": 100000})
+        result = NSEPriceAdapter().fetch_parameter_values(
+            ["RELIANCE"], bars_by_symbol={"RELIANCE": bars})
+        self.assertIn("price_momentum_weekly", result["observed"])
+        self.assertGreater(result["parameters"]["price_momentum_weekly"]["RELIANCE"],
+                           0)
+
+    def test_fetch_without_network_is_unavailable_not_fabricated(self):
+        from nifty100_adapter.data.nse_price_adapter import NSEPriceAdapter
+        result = NSEPriceAdapter().fetch_parameter_values(["RELIANCE"])
+        # no aiohttp and no bars supplied: honest unavailability
+        self.assertEqual(result["parameters"], {})
+
+
+class PipelineCollectionTests(unittest.TestCase):
+    """The data pipeline must produce values and honest coverage."""
+
+    @staticmethod
+    def _bars(symbol, n=40, drift=0.002, seed=7):
+        import random
+        rng = random.Random(seed)
+        price = 100.0
+        out = []
+        for _ in range(n):
+            price *= 1 + drift + rng.gauss(0, 0.012)
+            out.append({"symbol": symbol, "close": round(price, 2),
+                        "volume": int(1e5)})
+        return out
+
+    def test_collect_populates_store(self):
+        from nifty100_adapter.data.pipeline_orchestrator import (
+            collect_parameter_values)
+        data = {"RELIANCE": self._bars("RELIANCE"),
+                "TCS": self._bars("TCS", drift=0.004, seed=8)}
+        result = collect_parameter_values(["RELIANCE", "TCS"],
+                                          bars_by_symbol=data)
+        store = result["store"]
+        self.assertGreater(result["coverage"]["available_count"], 0)
+        self.assertIsNotNone(
+            store.usable("price_momentum_weekly", "RELIANCE"))
+
+    def test_coverage_is_honest_about_unwired_feeds(self):
+        from nifty100_adapter.data.pipeline_orchestrator import (
+            collect_parameter_values)
+        result = collect_parameter_values(["RELIANCE"])
+        cov = result["coverage"]
+        # fundamentals/legal/credit feeds are not installed: they must be
+        # reported missing, never filled with a neutral default
+        self.assertIn("f_score", cov["missing"])
+        self.assertIn("legal_cases_directors", cov["missing"])
+        self.assertLess(cov["coverage_pct"], 100.0)
+
+
+class HubParameterValueTests(unittest.TestCase):
+    """The hub must expose store-backed collection and coverage."""
+
+    def test_hub_collect_and_coverage(self):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        hub = UniversalStrategyHub(HubConfig(llm_provider="openai"))
+        hub.ingest_pkscreener_signals(["RELIANCE", "TCS"])
+        result = hub.collect_parameter_values()
+        self.assertEqual(result["coverage"]["total_parameters"], 48)
+
+    def test_backtester_prefers_stored_values(self):
+        from nifty100_adapter.backtest.sitrader_strategy_backtester import (
+            StrategyBacktester)
+        from nifty100_adapter.data.parameter_store import ParameterValueStore
+        import random
+        rng = random.Random(3)
+        bars = []
+        price = 100.0
+        for _ in range(40):
+            price *= 1 + 0.002 + rng.gauss(0, 0.012)
+            bars.append({"symbol": "RELIANCE", "close": round(price, 2),
+                         "volume": 100000})
+
+        store = ParameterValueStore()
+        store.set_schedule("price_momentum_weekly", "daily")
+        store.record("price_momentum_weekly", "RELIANCE", 42.0,
+                     "NSE Price History", observed=True)
+
+        bt = StrategyBacktester(value_store=store)
+        features = bt._features(bars, len(bars) - 1)
+        # the stored, provenance-tracked value must win over on-bar derivation
+        self.assertEqual(features["price_momentum_weekly"], 42.0)
+
+
 if __name__ == "__main__":
     unittest.main()
