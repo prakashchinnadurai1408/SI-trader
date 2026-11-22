@@ -17,6 +17,11 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+    env:
+      # The codebase prints rupee amounts (₹); Windows' cp1252 console codec
+      # cannot encode it and raises UnicodeEncodeError. Force UTF-8 mode.
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
