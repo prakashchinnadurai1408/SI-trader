@@ -105,6 +105,8 @@ class StrategyCandidate:
     edge_validation: Optional[Dict[str, Any]] = None
     selected_stocks: Optional[List[str]] = None
     risk_rules: Optional[Dict[str, Any]] = None
+    entry_rules: Optional[Dict[str, Any]] = None
+    exit_rules: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     
@@ -113,6 +115,10 @@ class StrategyCandidate:
             self.created_at = datetime.now().isoformat()
         if self.risk_rules is None:
             self.risk_rules = {}
+        if self.entry_rules is None:
+            self.entry_rules = {}
+        if self.exit_rules is None:
+            self.exit_rules = {}
         if self.metadata is None:
             self.metadata = {}
     
@@ -253,6 +259,8 @@ class UniversalStrategyHub:
             selected_stocks=self._normalise_selected_stocks(
                 strategy_config.get("selected_stocks", [])),
             risk_rules=strategy_config.get("risk_rules", {}),
+            entry_rules=strategy_config.get("entry_rules", {}),
+            exit_rules=strategy_config.get("exit_rules", {}),
             metadata={
                 "description": strategy_config.get("description", ""),
                 "timeframe": strategy_config.get("timeframe", "daily"),
@@ -864,6 +872,87 @@ class UniversalStrategyHub:
             "candidates_by_source": self._count_by_source(),
         }
     
+    def build_trading_plan(
+        self,
+        candidate_names: Optional[List[str]] = None,
+        prices: Optional[Dict[str, float]] = None,
+        cash: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Size the selected strategies into a reviewable order plan.
+
+        Stops and targets come from each candidate's exit rules; share counts
+        come from the four-limit BudgetManager. Nothing is placed here.
+        """
+        from .execution_bridge import StrategyExecutionBridge
+
+        pool = self.selected_strategies or self.strategy_candidates
+        if candidate_names:
+            pool = [c for c in pool if c.name in candidate_names]
+        if not pool:
+            return {"tradable": False,
+                    "blocked_reason": "no candidates selected"}
+
+        prices = prices or {s: 0.0 for c in pool
+                            for s in (c.selected_stocks or [])}
+        bridge = StrategyExecutionBridge(top_n=self.config.max_positions)
+
+        # Derive entry prices from the market data layer when they are absent.
+        missing = [s for s in prices if not prices.get(s)]
+        for symbol in missing:
+            quote = None
+            getter = getattr(self.market_data, "get_quote", None)
+            if callable(getter):
+                try:
+                    quote = getter(symbol)
+                except Exception:
+                    quote = None
+            if isinstance(quote, dict) and quote.get("price"):
+                prices[symbol] = float(quote["price"])
+                continue
+            self._audit("plan_no_price", symbol, "hub", {})
+
+        plan = bridge.build_plan(pool, prices, cash)
+        self._audit("build_trading_plan", f"{len(pool)} strategies", "hub",
+                    {"orders": len(plan.orders)})
+        return plan.as_dict()
+
+    def execute_trading_plan(self, plan_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a plan previously produced by build_trading_plan()."""
+        from .execution_bridge import (
+            StrategyExecutionBridge, TradingPlan, PlannedOrder)
+
+        bridge = StrategyExecutionBridge(top_n=self.config.max_positions)
+
+        orders = []
+        for o in (plan_dict or {}).get("orders", []):
+            order = PlannedOrder(
+                symbol=o.get("symbol", ""),
+                strategy_name=o.get("strategy_name", ""),
+                entry_price=float(o.get("entry_price", 0) or 0),
+                stop_loss=float(o.get("stop_loss", 0) or 0),
+                target=o.get("target"),
+                shares=int(o.get("shares", 0) or 0),
+                position_value=float(o.get("position_value", 0) or 0),
+                risk_at_stop=float(o.get("risk_at_stop", 0) or 0),
+                deciding_limit=o.get("deciding_limit", ""),
+                limit_reason=o.get("limit_reason", ""),
+                approved=bool(o.get("approved", False)),
+                reward_risk_ratio=float(o.get("reward_risk_ratio", 0) or 0),
+                action=o.get("action", "BUY"),
+            )
+            orders.append(order)
+
+        plan = TradingPlan(
+            orders=orders,
+            tradable=bool((plan_dict or {}).get("tradable", False)),
+            blocked_reason=(plan_dict or {}).get("blocked_reason"),
+            cash_after=(plan_dict or {}).get("cash_after"),
+        )
+        plan.recompute()
+        report = bridge.execute_plan(plan)
+        self._audit("execute_trading_plan", "plan", "hub", report.as_dict())
+        return report.as_dict()
+
     def _count_by_source(self) -> Dict[str, int]:
         """Count ingested candidates grouped by source."""
         counts: Dict[str, int] = {}

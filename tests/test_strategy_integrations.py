@@ -533,5 +533,88 @@ class OptionsPayoffTests(unittest.TestCase):
             self.assertTrue(result["breakeven"], name)
 
 
+class ExecutionBridgeTests(unittest.TestCase):
+    """Selected strategies must become sized, stoppped, executable orders."""
+
+    PRICES = {"RELIANCE": 2500.0, "TCS": 3200.0, "HDFCBANK": 1600.0}
+
+    @classmethod
+    def setUpClass(cls):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        cls.hub = UniversalStrategyHub(HubConfig(llm_provider="openai",
+                                                max_positions=2))
+        cls.hub.ingest_pkscreener_signals(["RELIANCE", "TCS", "HDFCBANK"])
+        cls.hub.select_strategies(min_confidence=40, max_strategies=2)
+        cls.plan = cls.hub.build_trading_plan(
+            candidate_names=[c.name for c in cls.hub.selected_strategies],
+            prices=dict(cls.PRICES), cash=25000.0)
+
+    def test_pipeline_can_be_constructed(self):
+        """Regression: OrderExecution.__init__ referenced BudgetManager
+        without importing it, so the pipeline had never been instantiable."""
+        from nifty100_adapter.risk.execution_pipeline import (
+            OrderExecutionPipeline)
+        pipeline = OrderExecutionPipeline()
+        self.assertIsNotNone(pipeline.budget_manager)
+        self.assertIsNotNone(pipeline.stop_target_engine)
+
+    def test_plan_sizes_orders(self):
+        self.assertTrue(self.plan["tradable"])
+        self.assertGreater(len(self.plan["orders"]), 0)
+        executable = [o for o in self.plan["orders"] if o["approved"]]
+        self.assertGreater(len(executable), 0)
+        for o in self.plan["orders"]:
+            self.assertGreater(o["stop_loss"], 0)
+            self.assertLess(o["stop_loss"], o["entry_price"])
+
+    def test_plan_totals_match_orders(self):
+        expected = sum(o["risk_at_stop"] for o in self.plan["orders"])
+        self.assertAlmostEqual(self.plan["total_risk_at_stops"], expected, 3)
+
+    def test_risk_stays_within_daily_limit(self):
+        # every planned order's loss at stop must fit the per-trade cap
+        for o in self.plan["orders"]:
+            self.assertLessEqual(o["risk_at_stop"], 500.0 + 1e-9)
+
+    def test_stop_and_target_come_from_exit_rules(self):
+        orders = self.plan["orders"]
+        self.assertTrue(any(o["target"] for o in orders))
+        for o in orders:
+            if o["target"]:
+                self.assertGreater(o["target"], o["entry_price"])
+
+    def test_execute_routes_approved_orders(self):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        with open("/dev/null", "w") if sys.platform != "win32" else \
+                open("nul", "w") as devnull:
+            import contextlib
+            with contextlib.redirect_stdout(devnull):
+                report = self.hub.execute_trading_plan(self.plan)
+        approved = sum(1 for o in self.plan["orders"] if o["approved"])
+        self.assertEqual(report["attempted"], approved)
+        self.assertEqual(report["filled"], approved)
+        self.assertEqual(report["rejected"], 0)
+
+    def test_daily_limit_blocks_plan(self):
+        from nifty100_adapter.strategy.execution_bridge import (
+            StrategyExecutionBridge)
+        bridge = StrategyExecutionBridge()
+        bridge.budget.daily_trades_count = bridge.budget.rules.max_trades_per_day
+        plan = bridge.build_plan(self.hub.strategy_candidates[:1],
+                                 self.PRICES, 25000.0)
+        self.assertFalse(plan.tradable)
+        self.assertTrue(plan.blocked_reason)
+
+    def test_bridge_respects_cash(self):
+        from nifty100_adapter.strategy.execution_bridge import (
+            StrategyExecutionBridge)
+        bridge = StrategyExecutionBridge()
+        plan = bridge.build_plan(self.hub.strategy_candidates[:2],
+                                 self.PRICES, cash=2000.0)
+        # with Rs 2,000 and a 10% buffer the bridge can barely fund anything
+        for o in plan.orders:
+            self.assertLessEqual(o.position_value, 1800.0 + 1e-9)
+
+
 if __name__ == "__main__":
     unittest.main()

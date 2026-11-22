@@ -44,6 +44,8 @@ except ImportError:
     # Define minimal stubs
     from dataclasses import dataclass
     from enum import Enum
+    OrderRequest = dict
+    OrderResponse = dict
     
     class OrderSide(Enum):
         BUY = "BUY"
@@ -84,6 +86,15 @@ except ImportError:
     
     class Position:
         pass
+
+# Sibling risk modules (always available; they have no optional deps)
+from .budget_manager import (
+    BudgetManager, BudgetRules, PositionSizingResult,
+)
+from .stop_target_engine import (
+    StopTargetEngine, StopTargetConfig, StopTargetResult,
+)
+from .kill_switch import ComplianceGateEnforcer, KillSwitchManager
 
 logger = logging.getLogger(__name__)
 
