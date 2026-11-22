@@ -27,6 +27,9 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+import math
+
+
 def _aiohttp():
     """Return the aiohttp module, or None if it is not installed.
 
@@ -354,6 +357,124 @@ class NSEPriceAdapter:
                 pass
 
         return min(100, max(0, liquidity_score))
+
+    @staticmethod
+    def _momentum_from_bars(bars: List[Dict[str, Any]]) -> Optional[MomentumScore]:
+        """Compute the momentum/volatility/liquidity profile from local bars.
+
+        Same maths as calculate_momentum() but from caller-supplied bars, so
+        values can be produced without any network call.
+        """
+        if not bars or len(bars) < 8:
+            return None
+        closes = [float(b["close"]) for b in bars]
+        vols = [float(b.get("volume", 0)) for b in bars]
+        last = closes[-1]
+
+        def mom(lookback):
+            if len(closes) > lookback and closes[-lookback - 1] > 0:
+                return (last / closes[-lookback - 1] - 1) * 100
+            return 0.0
+
+        rets = [math.log(closes[i] / closes[i - 1])
+                for i in range(1, len(closes)) if closes[i - 1] > 0]
+        volatility = 0.0
+        if len(rets) > 1:
+            m = sum(rets) / len(rets)
+            var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+            volatility = math.sqrt(var) * math.sqrt(252) * 100
+
+        w = min(21, len(closes))
+        liquidity = sum(v * c for v, c in zip(vols[-w:], closes[-w:])) / w
+        return MomentumScore(
+            symbol=str(bars[0].get("symbol", "_")),
+            weekly_momentum=round(mom(5), 2),
+            monthly_momentum=round(mom(21), 2),
+            yearly_momentum=round(mom(252), 2),
+            daily_momentum=round(mom(1), 2),
+            volatility=round(volatility, 2),
+            liquidity_score=round(min(100.0, liquidity / 10_000_00), 2),
+        )
+
+    def fetch_parameter_values(self, symbols: List[str],
+                               bars_by_symbol: Optional[Dict[str, Any]] = None
+                               ) -> Dict[str, Any]:
+        """Return catalogue-keyed parameter values for `symbols`.
+
+        Momentum is genuinely derivable from price history without any
+        optional dependency, so these are reported as observed. Anything
+        requiring a configured feed is reported as unavailable rather than
+        fabricated.
+        """
+        from .parameter_store import ParameterValueStore
+
+        result: Dict[str, Any] = {
+            "parameters": {},   # parameter_key -> {symbol -> value}
+            "source": "NSE Price History",
+            "observed": [],
+            "unavailable": [],
+        }
+
+        mapping = {
+            "price_momentum_weekly": "weekly_momentum",
+            "price_momentum_monthly": "monthly_momentum",
+            "price_momentum_yearly": "yearly_momentum",
+            "price_momentum_daily": "daily_momentum",
+            "midcap_volatility_adj": "volatility",
+            "midcap_liquidity_score": "liquidity_score",
+        }
+
+        # Price history is fetched synchronously in this environment only when
+        # aiohttp is present; without it there is nothing to derive from.
+        if bars_by_symbol is not None:
+            for key, attr in mapping.items():
+                per_symbol: Dict[str, float] = {}
+                for sym in symbols:
+                    score = self._momentum_from_bars(
+                        list(bars_by_symbol.get(sym) or []))
+                    if score is None:
+                        continue
+                    value = getattr(score, attr, None)
+                    if value is not None:
+                        per_symbol[sym] = float(value)
+                if per_symbol:
+                    result["parameters"][key] = per_symbol
+                    result["observed"].append(key)
+                else:
+                    result["unavailable"].append(key)
+            result["units"] = "caller-supplied bars"
+            return result
+
+        if _aiohttp() is None:
+            result["unavailable"] = list(mapping.keys())
+            return result
+
+        import asyncio
+
+        async def _collect():
+            out = {key: {} for key in mapping}
+            for sym in symbols:
+                score = await self.calculate_momentum(sym)
+                if not score:
+                    continue
+                for key, attr in mapping.items():
+                    value = getattr(score, attr, None)
+                    if value is not None:
+                        out[key][sym] = float(value)
+            return out
+
+        try:
+            values = asyncio.get_event_loop().run_until_complete(_collect())
+        except Exception:
+            values = {key: {} for key in mapping}
+
+        for key, per_symbol in values.items():
+            if per_symbol:
+                result["parameters"][key] = per_symbol
+                result["observed"].append(key)
+            else:
+                result["unavailable"].append(key)
+        return result
 
     async def get_multiple_momentum(
         self,
