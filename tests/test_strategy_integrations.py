@@ -877,5 +877,123 @@ class StateChecklistTests(unittest.TestCase):
         self.assertFalse(cl["summary"]["ready_to_trade"])
 
 
+class ArenaReviewTests(unittest.TestCase):
+    """CLAUDE.md's Arena workflow: fixed constraints, labelled results."""
+
+    @staticmethod
+    def _bars(symbol, n=320, drift=0.002, seed=31):
+        import random
+        rng = random.Random(seed)
+        price = 100.0
+        out = []
+        for _ in range(n):
+            price *= 1 + drift + rng.gauss(0, 0.012)
+            out.append({"symbol": symbol, "close": round(price, 2),
+                        "volume": int(1e5)})
+        return out
+
+    @classmethod
+    def _data(cls):
+        return {"RELIANCE": cls._bars("RELIANCE"),
+                "TCS": cls._bars("TCS", drift=0.004, seed=32)}
+
+    def _hub_with_candidates(self):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        hub = UniversalStrategyHub(HubConfig(llm_provider="openai",
+                                            max_positions=2))
+        hub.ingest_ma_crossovers(["MA5_MA10", "MA20_MA50", "MA50_MA200"])
+        return hub
+
+    def test_submission_must_total_100(self):
+        from nifty100_adapter.research.arena import (
+            ArenaReview, ArenaStrategy, DEFAULT_CONSTRAINTS)
+        review = ArenaReview(DEFAULT_CONSTRAINTS)
+        with self.assertRaises(ValueError):
+            review.add_strategy(ArenaStrategy(
+                name="bad", source="test",
+                parameter_weights={"price_momentum_weekly": 5}))
+
+    def test_metrics_are_measured_and_ranked(self):
+        hub = self._hub_with_candidates()
+        hub.select_strategies(min_confidence=40, max_strategies=3)
+        report = hub.arena_review(price_data=self._data())
+        measured = [r for r in report["ranking"] if r["label"] == "measured"]
+        self.assertEqual(len(measured), 3)
+        self.assertEqual([r["rank"] for r in report["ranking"]],
+                         list(range(1, 4)))
+        self.assertEqual(report["unlabelled_results"], [])
+
+    def test_no_data_is_labelled_not_scored_zero(self):
+        hub = self._hub_with_candidates()
+        report = hub.arena_review(price_data=None)
+        self.assertTrue(all(r["label"] == "unmeasured"
+                            for r in report["ranking"]))
+        self.assertEqual(len(report["unlabelled_results"]), 3)
+        for r in report["ranking"]:
+            self.assertTrue(r["notes"])
+
+    def test_weights_change_the_score(self):
+        """Weight differences must change the score at a fixed bar."""
+        from nifty100_adapter.backtest.sitrader_strategy_backtester import (
+            StrategyBacktester)
+        from nifty100_adapter.strategy import get_ma_strategy_config
+        data = self._data()
+        bars = data["RELIANCE"]
+        bt = StrategyBacktester(capital=25000.0, top_n=1)
+        feats = bt._features(bars, len(bars) - 1)
+        score_a = bt._score(get_ma_strategy_config("MA5_MA10")["parameter_weights"], feats)
+        score_b = bt._score(get_ma_strategy_config("MA20_MA50")["parameter_weights"], feats)
+        self.assertNotEqual(score_a, score_b)
+
+    def test_basket_larger_than_universe_gives_tied_rankings(self):
+        """When every stock fits in the basket, weights cannot change the
+        holdings, so tied rankings are correct behaviour and must be reported
+        as measured rather than hidden."""
+        hub = self._hub_with_candidates()
+        report = hub.arena_review(price_data=self._data())
+        scores = [r["metrics"].get("avg_trade") for r in report["ranking"]]
+        self.assertEqual(len(set(scores)), 1)
+        for r in report["ranking"]:
+            self.assertEqual(r["label"], "measured")
+
+    def test_holdout_does_not_drive_selection(self):
+        hub = self._hub_with_candidates()
+        data = self._data()
+        holdout = {"RELIANCE": self._bars("RELIANCE", drift=0.003, seed=33),
+                   "TCS": self._bars("TCS", drift=0.001, seed=34)}
+        report = hub.arena_review(price_data=data, holdout_data=holdout)
+        hold = report["holdout"]
+        self.assertTrue(hold["holdout_compared"])
+        self.assertEqual(hold["selection_used"], "evaluation window only")
+        for c in hold["comparisons"]:
+            self.assertIn("risks", c)
+
+    def test_reports_have_no_promotion_authority(self):
+        hub = self._hub_with_candidates()
+        report = hub.arena_review(price_data=self._data())
+        self.assertIn("read-only", report["promotion_policy"])
+        self.assertEqual(hub.paper_trading_strategies, [])
+
+    def test_constraints_are_identical_for_every_solver(self):
+        from nifty100_adapter.research.arena import (
+            ArenaReview, ArenaStrategy, DEFAULT_CONSTRAINTS)
+        review = ArenaReview(DEFAULT_CONSTRAINTS)
+        review.add_strategy(ArenaStrategy(
+            name="a", source="test",
+            parameter_weights={"price_momentum_weekly": 100},
+            decision_evidence={"custom": "x"}))
+        review.add_strategy(ArenaStrategy(
+            name="b", source="test",
+            parameter_weights={"price_momentum_weekly": 100},
+            decision_evidence={"custom": "y"}))
+        report = review.report(None)
+        # both entries carry the catalogue snapshot in their decision evidence
+        snapshots = {s["decision_evidence"]["parameter_catalogue_size"]
+                     for s in report["submissions"]}
+        self.assertEqual(snapshots, {48})
+        self.assertEqual(report["constraints"]["capital"], 25000.0)
+        self.assertEqual(report["constraints"]["cost_pct"], 0.38)
+
+
 if __name__ == "__main__":
     unittest.main()

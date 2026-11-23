@@ -526,6 +526,38 @@ class UniversalStrategyHub:
             } for a in result.strategies],
         }
 
+    def arena_review(self,
+                     candidate_names: Optional[List[str]] = None,
+                     price_data: Optional[Any] = None,
+                     holdout_data: Optional[Any] = None,
+                     constraints: Optional[Any] = None,
+                 ) -> Dict[str, Any]:
+        """Run the CLAUDE.md Arena review over candidates. Read-only.
+
+        Promotions and execution stay behind the existing gates; this only
+        ranks and reports. Unverified data and unmeasured results are
+        labelled explicitly rather than scored.
+        """
+        from ..research.arena import ArenaReview, DEFAULT_CONSTRAINTS
+
+        pool = self.selected_strategies or self.strategy_candidates
+        if candidate_names:
+            pool = [c for c in pool if c.name in candidate_names]
+        if not pool:
+            return {"submissions": [], "ranking": [],
+                    "reason": "no candidates selected"}
+
+        review = ArenaReview(constraints or DEFAULT_CONSTRAINTS)
+        review.add_candidates(pool)
+
+        report = review.report(price_data, holdout_data)
+        self._audit("arena_review", f"{len(pool)} strategies", "hub", {
+            "measured": sum(1 for r in report["ranking"]
+                            if r["label"] == "measured"),
+            "unlabelled": len(report["unlabelled_results"]),
+        })
+        return report
+
     def build_trading_plan(
         self,
         candidate_names: Optional[List[str]] = None,
