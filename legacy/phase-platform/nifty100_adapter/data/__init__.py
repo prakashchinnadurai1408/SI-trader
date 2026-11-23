@@ -66,6 +66,7 @@ def _optional(name: str, attrs: List[str]) -> Any:
 from .parameter_store import (  # noqa: E402
     ParameterValueStore, ParameterValue,
 )
+from .dataset_feed import DatasetFeed  # noqa: E402
 from .data_source_catalogue import (  # noqa: E402
     DATA_SOURCES,
     PARAMETER_TO_DATA_SOURCE,
@@ -83,7 +84,7 @@ __all__ = [
     "NewsSentimentAdapter", "NewsSentimentResult",
     "RegulatoryAdapter", "RegulatoryRiskScore",
     "DATA_SOURCES", "PARAMETER_TO_DATA_SOURCE", "DataSourceConfig",
-    "ParameterValueStore", "ParameterValue",
+    "ParameterValueStore", "ParameterValue", "DatasetFeed",
     "DataSourceType", "RefreshSchedule", "get_parameter_data_source",
     "DataPipelineOrchestrator", "DataRefreshResult", "PipelineHealth",
     "DataValidator", "ValidationResult", "ValidationReport",

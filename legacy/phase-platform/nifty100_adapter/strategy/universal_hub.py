@@ -923,6 +923,7 @@ class UniversalStrategyHub:
         self,
         symbols: Optional[List[str]] = None,
         bars_by_symbol: Optional[Dict[str, Any]] = None,
+        datasets: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Collect data-pipeline values into the hub's ParameterValueStore.
 
@@ -938,7 +939,7 @@ class UniversalStrategyHub:
         symbols = symbols or sorted({
             s for c in self.strategy_candidates
             for s in (c.selected_stocks or [])})
-        result = _collect(symbols, bars_by_symbol=bars_by_symbol)
+        result = _collect(symbols, bars_by_symbol=bars_by_symbol, datasets=datasets)
         self.value_store = result.pop("store", None) or ParameterValueStore()
         return result
 
