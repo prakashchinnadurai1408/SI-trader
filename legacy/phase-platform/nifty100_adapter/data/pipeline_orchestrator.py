@@ -331,24 +331,43 @@ DEFAULT_ADAPTER_SPECS = [
         "legal_cases_directors", "legal_cases_company_promoters",
         "auditor_resignations", "bulk_block_deals",
     ]),
+    ("dataset_feed", "..data.dataset_feed", "on-event", [
+        # Covers every catalogue parameter the caller supplies values for.
+        "f_score", "altman_z_score", "pe_ratio_vs_sector", "roe_trend",
+        "earnings_trend", "debt_equity_ratio", "interest_coverage",
+        "cash_flow_positive", "promoter_holding_pct",
+        "promoter_pledging_pct", "fii_dii_mf_trend", "ownership_breakdown",
+        "historical_news_sentiment", "legal_cases_directors",
+        "legal_cases_company_promoters", "auditor_resignations",
+        "credit_rating_changes", "company_valuation", "swot_analytics",
+        "competitive_plans", "customer_feedback", "industry_expectations",
+    ]),
 ]
 
 
-def _call_fetcher(fetcher, symbols, bars_by_symbol):
-    """Call fetcher(symbols[, bars_by_symbol]) depending on its signature."""
+def _call_fetcher(fetcher, symbols, bars_by_symbol=None, datasets=None):
+    """Call fetcher(symbols[, extras]) using whatever its signature accepts."""
     try:
         params = inspect.signature(fetcher).parameters
     except (TypeError, ValueError):
         params = {}
+    kwargs = {}
     if bars_by_symbol is not None and "bars_by_symbol" in params:
-        return fetcher(symbols, bars_by_symbol=bars_by_symbol)
-    if bars_by_symbol is not None and len(params) >= 2:
-        return fetcher(symbols, bars_by_symbol)
+        kwargs["bars_by_symbol"] = bars_by_symbol
+    if datasets is not None and "datasets" in params:
+        kwargs["datasets"] = datasets
+    if kwargs:
+        return fetcher(symbols, **kwargs)
+    # Positional fallbacks for fetchers that take extras without keywords.
+    extras = [v for v in (bars_by_symbol, datasets) if v is not None]
+    if extras and len(params) > 1:
+        return fetcher(symbols, *extras[: len(params) - 1])
     return fetcher(symbols)
 
 
 def populate_store(orchestrator, symbols: List[str], store=None,
-                   bars_by_symbol: Optional[Dict[str, Any]] = None
+                   bars_by_symbol: Optional[Dict[str, Any]] = None,
+                   datasets: Optional[Dict[str, Any]] = None
                    ) -> Dict[str, Any]:
         """Collect parameter values from every adapter into a store.
 
@@ -372,7 +391,7 @@ def populate_store(orchestrator, symbols: List[str], store=None,
                     unavailable.append(key)
                 continue
             try:
-                result = _call_fetcher(fetcher, symbols, bars_by_symbol)
+                result = _call_fetcher(fetcher, symbols, bars_by_symbol, datasets)
             except Exception as exc:
                 for key in params:
                     store.mark_unavailable(key, f"{name}: {exc}", schedule)
@@ -405,7 +424,8 @@ def populate_store(orchestrator, symbols: List[str], store=None,
 
 
 def collect_parameter_values(symbols: List[str], store=None,
-                             bars_by_symbol: Optional[Dict[str, Any]] = None
+                             bars_by_symbol: Optional[Dict[str, Any]] = None,
+                             datasets: Optional[Dict[str, Any]] = None
                              ) -> Dict[str, Any]:
     """Build the default pipeline and collect all available values into a store.
 
@@ -414,7 +434,8 @@ def collect_parameter_values(symbols: List[str], store=None,
     report over the 48-parameter catalogue.
     """
     orchestrator = build_default_pipeline()
-    return populate_store(orchestrator, symbols, store, bars_by_symbol)
+    return populate_store(orchestrator, symbols, store, bars_by_symbol,
+                          datasets)
 
 
 def build_default_pipeline(
@@ -439,8 +460,8 @@ def build_default_pipeline(
         adapter_cls = None
         for attr in dir(module):
             obj = getattr(module, attr)
-            if (isinstance(obj, type) and attr.endswith("Adapter")
-                    and attr != "BrokerAdapter"):
+            if (isinstance(obj, type) and attr not in ("BrokerAdapter",)
+                    and (attr.endswith("Adapter") or attr.endswith("Feed"))):
                 adapter_cls = obj
                 break
         if adapter_cls is None:

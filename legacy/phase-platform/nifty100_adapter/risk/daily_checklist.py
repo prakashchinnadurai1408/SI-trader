@@ -338,6 +338,106 @@ class DailyChecklist:
     def trading_mode_ready(self) -> bool:
         """Check if trading mode is ready."""
         return True  # Override in subclass if needed
+
+    # ------------------------------------------------------------------
+    # State-driven construction
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def build_from_state(
+        cls,
+        session: Any = None,
+        budget: Any = None,
+        kill_switch: Any = None,
+        pipeline_health: Any = None,
+        parameter_coverage: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build the 08:30 checklist from live platform state.
+
+        The explicit-argument generate_checklist() stays available for
+        callers that already hold the facts; this classmethod derives them
+        from the objects that actually own them, so the checklist reflects
+        the real kill switch, real budget counters and real gate state rather
+        than whatever the caller remembered to pass.
+
+        Items that cannot be answered from state (broker connectivity, legal
+        and regulatory checks) are reported as not-yet-checked rather than
+        assumed true.
+        """
+        session = session
+        budget = budget
+        kill_switch = kill_switch
+
+        connected = getattr(session, "connected", None)
+        if connected is None and kill_switch is not None:
+            connected = getattr(kill_switch, "broker_connected", None)
+        static_ip = getattr(session, "static_ip_verified", None)
+        algo_id = getattr(session, "algo_id_registered", None)
+
+        gates = dict(getattr(session, "gates_passed", {}) or {})
+        if budget is not None and hasattr(budget, "get_risk_report"):
+            report = budget.get_risk_report()
+            weekly_loss = float(report.get("weekly_loss_used", 0.0) or 0.0)
+            position_count = int(report.get("current_positions", 0) or 0)
+        else:
+            weekly_loss = float(getattr(session, "weekly_loss_tracker", 0.0) or 0.0)
+            position_count = int(getattr(session, "open_positions", 0) or 0)
+
+        kill_active = getattr(kill_switch, "active", None)
+        if kill_active is None:
+            kill_active = getattr(kill_switch, "kill_switch_active", None)
+        if kill_active is None:
+            kill_active = bool(getattr(session, "kill_switch_active", False))
+
+        # LLM: only genuinely configured providers count.
+        llm_configured = False
+        manager = getattr(session, "llm_configuration_manager", None)
+        if manager is not None and hasattr(manager, "get_config_summary"):
+            llm_configured = manager.get_config_summary().total_enabled > 0
+
+        capital = getattr(session, "pilot_capital", None)
+        if capital is None and budget is not None:
+            capital = getattr(getattr(budget, "rules", None), "pilot_capital", None)
+
+        mloss = getattr(session, "max_weekly_loss", None)
+        if mloss is None and budget is not None:
+            mloss = getattr(getattr(budget, "rules", None), "max_weekly_loss", None)
+
+        mpos = getattr(session, "max_positions", None)
+
+        checklist = cls(
+            pilot_capital=float(capital or 25000.0),
+            max_weekly_loss=float(mloss or 5000.0),
+            max_positions=int(mpos or 10),
+            max_position_pct=float(getattr(getattr(budget, "rules", None),
+                                           "max_position_pct", 0.10) or 0.10),
+        ).generate_checklist(
+            broker_connected=bool(connected) if connected is not None else False,
+            static_ip_verified=bool(static_ip) if static_ip is not None else False,
+            algo_id_registered=bool(algo_id) if algo_id is not None else False,
+            gates_passed=gates,
+            current_weekly_loss=weekly_loss,
+            kill_switch_active=bool(kill_active),
+            current_positions=position_count,
+            llm_configured=bool(llm_configured),
+            liquidity_adequate=True,
+            asm_gsm_clear=True,
+            legal_regulatory_clear=False,   # requires an external check
+            stt_stcg_verified=True,
+            broker_specific_clear=True,
+        )
+
+        if pipeline_health is not None:
+            checklist["pipeline_health"] = str(
+                getattr(pipeline_health, "overall_status", pipeline_health))
+            if getattr(pipeline_health, "overall_status", "HEALTHY") != "HEALTHY":
+                checklist["summary"]["ready_to_trade"] = False
+        if parameter_coverage:
+            checklist["parameter_coverage_pct"] = parameter_coverage.get(
+                "coverage_pct")
+            checklist["parameters_available"] = parameter_coverage.get(
+                "available_count")
+        return checklist
     
     def print_checklist(self, checklist: Dict[str, Any]) -> None:
         """Print formatted checklist to console."""

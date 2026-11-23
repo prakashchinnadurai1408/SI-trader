@@ -781,5 +781,101 @@ class HubParameterValueTests(unittest.TestCase):
         self.assertEqual(features["price_momentum_weekly"], 42.0)
 
 
+class DatasetFeedTests(unittest.TestCase):
+    """Caller-supplied datasets must extend coverage honestly."""
+
+    def test_supplied_values_are_recorded_with_provenance(self):
+        from nifty100_adapter.data.dataset_feed import DatasetFeed
+        feed = DatasetFeed()
+        result = feed.fetch_parameter_values(
+            ["RELIANCE"], datasets={"RELIANCE": {"f_score": 8,
+                                                 "altman_z_score": 3.4}})
+        self.assertIn("f_score", result["observed"])
+        self.assertEqual(result["parameters"]["f_score"]["RELIANCE"], 8.0)
+        self.assertEqual(result["source"], "Caller-supplied dataset")
+
+    def test_unsupplied_parameters_reported_unavailable(self):
+        from nifty100_adapter.data.dataset_feed import DatasetFeed
+        feed = DatasetFeed()
+        result = feed.fetch_parameter_values(
+            ["RELIANCE"], datasets={"RELIANCE": {"f_score": 8}})
+        self.assertIn("swot_analytics", result["unavailable"])
+        self.assertNotIn("swot_analytics", result["observed"])
+
+    def test_unknown_keys_are_ignored_not_remapped(self):
+        from nifty100_adapter.data.dataset_feed import DatasetFeed
+        feed = DatasetFeed()
+        result = feed.fetch_parameter_values(
+            ["RELIANCE"], datasets={"RELIANCE": {"not_a_catalogue_key": 5}})
+        self.assertEqual(result["observed"], [])
+        self.assertEqual(result["parameters"], {})
+
+    def test_pipeline_coverage_rises_with_datasets(self):
+        from nifty100_adapter.data.pipeline_orchestrator import (
+            collect_parameter_values)
+        base = collect_parameter_values(["RELIANCE"])["coverage"]["available_count"]
+        extra = collect_parameter_values(
+            ["RELIANCE"],
+            datasets={"RELIANCE": {"f_score": 8, "roe_trend": 18.0,
+                                   "promoter_holding_pct": 50.0}}
+        )["coverage"]["available_count"]
+        self.assertGreater(extra, base)
+
+    def test_values_expire_on_the_catalogue_schedule(self):
+        from nifty100_adapter.data.dataset_feed import DatasetFeed
+        feed = DatasetFeed()
+        result = feed.fetch_parameter_values(
+            ["RELIANCE"], datasets={"RELIANCE": {"f_score": 8}})
+        # f_score refreshes quarterly per the catalogue
+        self.assertEqual(result["schedules"]["f_score"], "quarterly")
+
+
+class StateChecklistTests(unittest.TestCase):
+    """The 08:30 checklist must be derived from real state."""
+
+    @staticmethod
+    def _session(**over):
+        defaults = dict(
+            connected=True, static_ip_verified=True, algo_id_registered=True,
+            gates_passed={"backtest": True, "paper_trading": True,
+                          "compliance": True, "risk": True, "capital": True},
+            pilot_capital=25000.0, max_weekly_loss=5000.0, max_positions=10,
+            kill_switch_active=False, weekly_loss_tracker=1200.0,
+            llm_configuration_manager=None)
+        defaults.update(over)
+        return type("S", (), defaults)()
+
+    def test_checklist_derives_from_budget_and_gates(self):
+        from nifty100_adapter.risk.daily_checklist import DailyChecklist
+        from nifty100_adapter.risk.budget_manager import BudgetManager
+        budget = BudgetManager()
+        budget.record_trade("RELIANCE", -300.0, 5, 2500.0)
+        cl = DailyChecklist.build_from_state(session=self._session(),
+                                            budget=budget)
+        self.assertEqual(cl["total_items"], 14)
+        item = next(i for i in cl["items"] if "Weekly loss" in i["name"])
+        self.assertEqual(item["status"], "PASS")
+        gate = next(i for i in cl["items"] if "compliance gates" in i["name"])
+        self.assertEqual(gate["status"], "PASS")
+
+    def test_kill_switch_fails_the_checklist(self):
+        from nifty100_adapter.risk.daily_checklist import DailyChecklist
+        from nifty100_adapter.risk.kill_switch import KillSwitchManager
+        ks = KillSwitchManager()
+        ks.trigger("test", triggered_by="manual")
+        cl = DailyChecklist.build_from_state(session=self._session(),
+                                            kill_switch=ks)
+        item = next(i for i in cl["items"] if "Kill switch" in i["name"])
+        self.assertEqual(item["status"], "FAIL")
+        self.assertFalse(cl["summary"]["ready_to_trade"])
+
+    def test_legal_check_is_not_assumed_true(self):
+        from nifty100_adapter.risk.daily_checklist import DailyChecklist
+        cl = DailyChecklist.build_from_state(session=self._session())
+        item = next(i for i in cl["items"] if "Legal" in i["name"])
+        self.assertEqual(item["status"], "FAIL")
+        self.assertFalse(cl["summary"]["ready_to_trade"])
+
+
 if __name__ == "__main__":
     unittest.main()
