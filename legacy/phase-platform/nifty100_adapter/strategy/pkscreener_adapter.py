@@ -79,9 +79,14 @@ class PKScreenerAdapter:
         },
     }
 
-    def __init__(self, config: Optional[PkScreenerConfig] = None):
+    def __init__(self, config: Optional[PkScreenerConfig] = None,
+                 random_seed: Optional[int] = 0):
         self.config = config or PkScreenerConfig()
         self._pkscreener_available = False
+        # Template scanning is deterministic by default so a review can be
+        # reproduced and audited; pass random_seed=None for live randomness.
+        import random as _random
+        self._rng = _random.Random(random_seed)
         self._check_availability()
 
     def _check_availability(self) -> None:
@@ -180,8 +185,6 @@ class PKScreenerAdapter:
         threshold: float,
     ) -> List[PkScreenerSignal]:
         """Template-based pattern detection (no PKScreener install needed)."""
-        import random
-
         base = {
             "breakout": 78.0,
             "flag": 74.0,
@@ -194,7 +197,7 @@ class PKScreenerAdapter:
                 base_conf = base.get(ptype)
                 if base_conf is None:
                     continue
-                confidence = min(95.0, base_conf + random.uniform(-8, 8))
+                confidence = min(95.0, base_conf + self._rng.uniform(-8, 8))
                 if confidence < threshold:
                     continue
                 signals.append(PkScreenerSignal(
