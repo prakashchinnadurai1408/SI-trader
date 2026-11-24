@@ -5,7 +5,9 @@ third-party packages (aiohttp, requests, vectorbt, backtrader) are missing,
 so these tests run on the core requirements.txt only.
 """
 
+import json
 import os
+import shutil
 import sys
 import unittest
 
@@ -993,6 +995,66 @@ class ArenaReviewTests(unittest.TestCase):
         self.assertEqual(snapshots, {48})
         self.assertEqual(report["constraints"]["capital"], 25000.0)
         self.assertEqual(report["constraints"]["cost_pct"], 0.38)
+
+
+class ObservabilityTests(unittest.TestCase):
+    """Every run must leave a durable, enumerable, honest artefact."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="sitrader_obs_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_report_written_and_loadable(self):
+        from nifty100_adapter.observability import ReportWriter
+        writer = ReportWriter(records_dir=self.tmp)
+        path = writer.emit("arena", {"constraints": {"capital": 25000},
+                                    "metrics": {"x": 1},
+                                    "labels": {"unmeasured": ["a"]}})
+        self.assertTrue(os.path.exists(path))
+        loaded = ReportWriter(records_dir=self.tmp).load_report(
+            json.load(open(path))["run_id"], "arena")
+        self.assertEqual(loaded["kind"], "arena")
+        self.assertEqual(loaded["labels"]["unmeasured"], ["a"])
+
+    def test_index_enumerates_runs(self):
+        from nifty100_adapter.observability import ReportWriter
+        writer = ReportWriter(records_dir=self.tmp)
+        writer.emit("weekly", {"metrics": {"n": 1}})
+        writer.emit("weekly", {"metrics": {"n": 2}})
+        entries = ReportWriter(records_dir=self.tmp).list_reports(kind="weekly")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual({e["kind"] for e in entries}, {"weekly"})
+
+    def test_runs_are_append_only(self):
+        from nifty100_adapter.observability import ReportWriter
+        writer = ReportWriter(records_dir=self.tmp)
+        first = writer.emit("weekly", {"metrics": {"n": 1}})
+        snapshot = open(first).read()
+        writer.emit("weekly", {"metrics": {"n": 2}})
+        # the first artefact must not have been mutated by the second run
+        self.assertEqual(open(first).read(), snapshot)
+
+    def test_hub_review_emits_report(self):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        hub = UniversalStrategyHub(HubConfig(
+            llm_provider="openai", max_positions=2, records_dir=self.tmp))
+        hub.ingest_ma_crossovers(["MA5_MA10", "MA20_MA50"])
+        report = hub.arena_review(price_data=None)
+        self.assertTrue(os.path.exists(report["report_path"]))
+        loaded = json.load(open(report["report_path"]))
+        self.assertEqual(loaded["kind"], "arena")
+        # unmeasured results must be recorded as unmeasured, never scored
+        self.assertEqual(len(loaded["labels"]["unmeasured"]), 2)
+        self.assertEqual(loaded["labels"]["measured"], [])
+
+    def test_no_records_dir_means_no_artefact(self):
+        from nifty100_adapter.strategy import UniversalStrategyHub, HubConfig
+        hub = UniversalStrategyHub(HubConfig(llm_provider="openai",
+                                            max_positions=2))
+        hub.ingest_ma_crossovers(["MA5_MA10"])
+        report = hub.arena_review(price_data=None)
+        self.assertNotIn("report_path", report)
 
 
 if __name__ == "__main__":

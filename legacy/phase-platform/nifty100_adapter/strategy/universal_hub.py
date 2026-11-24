@@ -146,6 +146,7 @@ class HubConfig:
     broker_platform: BrokerPlatform = BrokerPlatform.ZERODHA_KITE
     llm_provider: str = "openai"
     value_store: Optional[Any] = None  # ParameterValueStore
+    records_dir: Optional[str] = None  # when set, reviews write durable reports
     enable_vectorbt: bool = True
     enable_backtrader: bool = True
     enable_pkscreener: bool = True
@@ -184,6 +185,7 @@ class UniversalStrategyHub:
         self.config = config or HubConfig()
         self.cost_model = get_cost_model()
         self.value_store = self.config.value_store
+        self.records_dir = self.config.records_dir
         
         self.market_data = self.config.market_data_manager or MarketDataManager()
         self.broker_adapter = self.config.broker_adapter
@@ -556,6 +558,27 @@ class UniversalStrategyHub:
                             if r["label"] == "measured"),
             "unlabelled": len(report["unlabelled_results"]),
         })
+
+        # Leave a durable artefact: a review that only exists as a dict on a
+        # console cannot be audited after the fact.
+        if self.config.records_dir:
+            from ..observability import write_run_report
+            labels = {
+                "unmeasured": report["unlabelled_results"],
+                "measured": [r["name"] for r in report["ranking"]
+                             if r["label"] == "measured"],
+            }
+            path = write_run_report("arena", {
+                "constraints": report["constraints"],
+                "inputs": {"submissions": report["submissions"],
+                           "symbols": sorted({
+                               s for c in pool
+                               for s in (c.selected_stocks or [])})},
+                "metrics": {"ranking": report["ranking"]},
+                "labels": labels,
+                "holdout": report.get("holdout"),
+            }, records_dir=self.config.records_dir)
+            report["report_path"] = path
         return report
 
     def build_trading_plan(
