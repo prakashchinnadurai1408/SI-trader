@@ -28,9 +28,10 @@ def _looks_like_current_layout(root):
 
 
 # Prefer the layout that actually carries the current parameter catalogue.
+# nifty100_weekly is now the single source of truth (48-parameter catalogue).
 CANDIDATE_ROOTS = [
-    os.path.join(REPO_ROOT, "legacy", "phase-platform"),  # main layout
-    os.path.join(REPO_ROOT, "nifty100_weekly"),           # older layout
+    os.path.join(REPO_ROOT, "nifty100_weekly"),   # current layout (migrated)
+    os.path.join(REPO_ROOT, "legacy", "phase-platform"),  # legacy layout
     REPO_ROOT,
 ]
 _resolved = next(
