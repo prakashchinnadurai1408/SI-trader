@@ -369,13 +369,19 @@ def score_individual_stock(symbol, records, evidence):
             if not passes(key, role, value):
                 failed_vetoes.append(key)
         elif role == RoleType.SCORE:
-            if passes(key, role, value):
+            # SCORE params are numeric; check bounds if defined, otherwise count as scored
+            in_bounds = True
+            if definition.min_value is not None and value < definition.min_value:
+                in_bounds = False
+            if definition.max_value is not None and value > definition.max_value:
+                in_bounds = False
+            if in_bounds:
                 score_contributions[key] = definition.weight
                 score_total += definition.weight
             else:
                 score_contributions[key] = 0
             score_weight_total += definition.weight
-            outcome = f"Weight {definition.weight}" + (" (scored)" if passes(key, role, value) else " (outside bounds)")
+            outcome = f"Weight {definition.weight}" + (" (scored)" if in_bounds else " (outside bounds)")
         elif role == RoleType.FLAG:
             outcome = "Flagged" if value else "Clear"
         elif role == RoleType.ADVISORY:
