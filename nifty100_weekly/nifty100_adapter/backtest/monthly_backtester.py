@@ -345,9 +345,11 @@ def run(folder, start, end, capital, weights=None, defensive=False, catalogue_we
 
 
 def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False, experiment=None, catalogue_weights=None):
-    if experiment is not None and (experiment not in EXPERIMENTS or weights is not None or defensive):
+    if experiment is not None and (experiment not in EXPERIMENTS or weights is not None or defensive or catalogue_weights is not None):
         raise ValueError("Select one price-input experiment against the fixed baseline.")
-    if defensive and weights is not None:
+    if weights is not None and catalogue_weights is not None:
+        raise ValueError("Select either challenger or catalogue weights, not both.")
+    if defensive and (weights is not None or catalogue_weights is not None):
         raise ValueError("Test the defensive overlay separately with the frozen factor weights.")
     manifest, prices, snapshots, tri = inputs
     if not math.isfinite(capital) or capital <= 0:

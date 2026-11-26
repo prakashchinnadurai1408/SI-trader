@@ -334,10 +334,10 @@ def score_individual_stock(symbol, records, evidence):
 
     param_rows = {row["key"]: row for row in evidence["parameters"]}
     symbol_key = symbol
-    market_keys = {"*"}
 
     failed_filters = []
     failed_vetoes = []
+    missing_parameters = []
     score_contributions = {}
     score_total = 0.0
     score_weight_total = 0.0
@@ -347,9 +347,10 @@ def score_individual_stock(symbol, records, evidence):
         row = param_rows.get(key)
         is_market = key in MARKET_FACTORS
         lookup_key = "*" if is_market else symbol_key
-        record = records[key].get(lookup_key)
+        record = records.get(key, {}).get(lookup_key)
 
         if record is None:
+            missing_parameters.append(key)
             parameter_outcomes[key] = {
                 "role": definition.role_type.value,
                 "value": None,
@@ -370,13 +371,15 @@ def score_individual_stock(symbol, records, evidence):
             if not passes(key, role, value):
                 failed_vetoes.append(key)
         elif role == RoleType.SCORE:
-            if passes(key, role, value):
+            within_bounds = ((definition.min_value is None or value >= definition.min_value)
+                             and (definition.max_value is None or value <= definition.max_value))
+            if within_bounds:
                 score_contributions[key] = definition.weight
                 score_total += definition.weight
             else:
                 score_contributions[key] = 0
             score_weight_total += definition.weight
-            outcome = f"Weight {definition.weight}" + (" (scored)" if passes(key, role, value) else " (outside bounds)")
+            outcome = f"Weight {definition.weight}" + (" (scored)" if within_bounds else " (outside bounds)")
         elif role == RoleType.FLAG:
             outcome = "Flagged" if value else "Clear"
         elif role == RoleType.ADVISORY:
@@ -392,15 +395,16 @@ def score_individual_stock(symbol, records, evidence):
             "outcome": outcome,
         }
 
-    eligible = not failed_filters and not failed_vetoes
+    eligible = not failed_filters and not failed_vetoes and not missing_parameters
     normalized_score = round(score_total / score_weight_total * 100, 2) if score_weight_total > 0 else 0.0
 
     return {
         "symbol": symbol,
-        "status": "eligible" if eligible else "excluded",
+        "status": "blocked" if missing_parameters else ("eligible" if eligible else "excluded"),
         "score": round(score_total, 2),
         "normalized_score": normalized_score,
         "score_weight_total": score_weight_total,
+        "missing_parameters": missing_parameters,
         "failed_filters": failed_filters,
         "failed_vetoes": failed_vetoes,
         "parameter_outcomes": parameter_outcomes,

@@ -26,7 +26,7 @@ from ..config.parameter_catalogue import (
 )
 
 # Cost-model rate parameters are model inputs, not per-stock FILTER/VETO checks.
-RATES_SET = {"stt_rate_equity", "stcg_tax_rate", "brokerage_rate_param"}
+RATES_SET = {"stt_rate_equity", "stcg_tax_rate", "brokerage_rate"}
 
 
 class UniverseFilter:
@@ -153,20 +153,29 @@ class ScoreCalculator:
         self.score_params = get_parameters_by_role(RoleType.SCORE)
         self.filter_params = get_parameters_by_role(RoleType.FILTER)
 
+    @staticmethod
+    def veto_passes(param, value):
+        if param.parameter_key == "promoter_pledging_pct":
+            return value <= param.default_value
+        if param.parameter_key == "cost_vs_edge_check":
+            return value > 0
+        return not bool(value)
+
     def apply_vetoes(self, stock_data: Dict[str, float]) -> bool:
         """Return True if the stock passes all VETO checks (not vetoed)."""
         for param in self.veto_params:
             value = stock_data.get(param.parameter_key)
             if value is None or pd.isna(value):
                 continue
-            # VETO params are boolean: True means exclude
-            if bool(value):
+            if not self.veto_passes(param, value):
                 return False
         return True
 
     def apply_filters(self, stock_data: Dict[str, float]) -> bool:
         """Return True if the stock passes all FILTER checks."""
         for param in self.filter_params:
+            if param.parameter_key in RATES_SET:
+                continue
             value = stock_data.get(param.parameter_key)
             if value is None or pd.isna(value):
                 continue
@@ -321,7 +330,7 @@ class WeeklyBacktester:
                 value = row.get(param.parameter_key)
                 if value is None or pd.isna(value):
                     continue
-                if bool(value):
+                if not self.score_calc.veto_passes(param, value):
                     failures.add(row.get("symbol", row.name))
             catalogue_vetoed.update(failures)
             filter_stats_detail[param.parameter_key] = len(failures)
