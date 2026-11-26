@@ -4,6 +4,8 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import logging
+from uuid import uuid4
 import re
 from pathlib import Path
 from .deployment import Runtime, Sessions
@@ -245,6 +247,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
         except (ValueError, OSError) as error:
             self.send_json(400, {"error": str(error)})
+        except Exception:
+            request_id = uuid4().hex[:12]
+            logging.getLogger(__name__).exception("API request %s failed at %s", request_id, self.path)
+            self.send_json(500, {"error": "The server could not complete this request. Check the server log using the reference below.", "requestId": request_id})
 
 
 class DashboardServer(ThreadingHTTPServer):

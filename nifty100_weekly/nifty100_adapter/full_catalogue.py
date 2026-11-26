@@ -20,17 +20,17 @@ MARKET_FACTORS = {
     "international_war_situation", "government_news", "political_incidents",
     "regulator_announcements", "historical_events", "stt_rate_equity",
     "stcg_tax_rate", "brokerage_rate",
-}
+}.intersection(PARAMETERS)
 RATES = {"stt_rate_equity", "stcg_tax_rate", "brokerage_rate"}
 THRESHOLDS = {
     "liquidity_floor", "debt_equity_ratio", "interest_coverage",
     "promoter_holding_pct", "promoter_pledging_pct",
 }
-NATIVE = {
+NATIVE = {key: column for key, column in {
     "price_momentum_daily": "price_momentum_daily",
     "price_momentum_weekly": "price_momentum_weekly",
     "liquidity_floor": "daily_turnover_crore",
-}
+}.items() if key in PARAMETERS}
 NUMERIC_ROLES = {RoleType.SCORE, RoleType.MARKET_DIAL}
 
 

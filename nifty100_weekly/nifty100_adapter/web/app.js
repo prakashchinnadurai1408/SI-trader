@@ -918,7 +918,7 @@ async function request(path, body) {
     state.snapshot = null;
     render();
   }
-  if (!response.ok) throw new Error(result.error || "The local request failed.");
+  if (!response.ok) throw new Error((result.error || "The request failed.") + (result.requestId ? " Reference: " + result.requestId : ""));
   return result;
 }
 
