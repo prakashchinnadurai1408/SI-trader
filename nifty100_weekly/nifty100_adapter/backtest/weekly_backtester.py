@@ -25,6 +25,9 @@ from ..config.parameter_catalogue import (
     validate_weight_total,
 )
 
+# Cost-model rate parameters are model inputs, not per-stock FILTER/VETO checks.
+RATES_SET = {"stt_rate_equity", "stcg_tax_rate", "brokerage_rate"}
+
 
 class UniverseFilter:
     """Filters applied to Nifty 100 universe each week."""
@@ -135,7 +138,13 @@ class VetoChecker:
 
 
 class ScoreCalculator:
-    """Calculates weighted scores for Nifty 100 stocks."""
+    """Calculates weighted scores for Nifty 100 stocks.
+
+    Applies the full 48-parameter catalogue:
+    - SCORE parameters contribute weight to the raw score
+    - FILTER parameters disqualify stocks that fall outside bounds
+    - VETO parameters automatically exclude stocks
+    """
 
     def __init__(self, cost_model: Optional[IndianCostModel] = None):
         self.cost_model = cost_model or get_cost_model()
@@ -144,14 +153,43 @@ class ScoreCalculator:
         self.score_params = get_parameters_by_role(RoleType.SCORE)
         self.filter_params = get_parameters_by_role(RoleType.FILTER)
 
+    @staticmethod
+    def veto_passes(param, value):
+        if param.parameter_key == "promoter_pledging_pct":
+            return value <= param.default_value
+        if param.parameter_key == "cost_vs_edge_check":
+            return value > 0
+        return not bool(value)
+
+    def apply_vetoes(self, stock_data: Dict[str, float]) -> bool:
+        """Return True if the stock passes all VETO checks (not vetoed)."""
+        for param in self.veto_params:
+            value = stock_data.get(param.parameter_key)
+            if value is None or pd.isna(value):
+                continue
+            if not self.veto_passes(param, value):
+                return False
+        return True
+
+    def apply_filters(self, stock_data: Dict[str, float]) -> bool:
+        """Return True if the stock passes all FILTER checks."""
+        for param in self.filter_params:
+            if param.parameter_key in RATES_SET:
+                continue
+            value = stock_data.get(param.parameter_key)
+            if value is None or pd.isna(value):
+                continue
+            if param.min_value is not None and value < param.min_value:
+                return False
+            if param.max_value is not None and value > param.max_value:
+                return False
+        return True
+
     def calculate_raw_score(self, stock_data: Dict[str, float]) -> float:
         """Calculate weighted raw score for a stock.
 
         For each SCORE-type parameter, if the stock's value is within acceptable range,
         add the parameter's weight. If outside range, don't add weight.
-
-        This is a simplified implementation; full version would map parameter values
-        to score contributions.
         """
         score = 0.0
 
@@ -281,9 +319,47 @@ class WeeklyBacktester:
         # Veto 3: Regulatory actions
         universe_filtered = self.veto_checker.check_regulatory_actions_veto(universe_filtered)
 
+        # Step 4b: Apply all catalogue FILTER and VETO parameters
+        catalogue_vetoed = set()
+        filter_stats_detail = {}
+        for param in self.score_calc.veto_params:
+            if param.parameter_key in RATES_SET:
+                continue  # Rate parameters are cost-model inputs, not stock vetoes
+            failures = set()
+            for _, row in universe_filtered.iterrows():
+                value = row.get(param.parameter_key)
+                if value is None or pd.isna(value):
+                    continue
+                if not self.score_calc.veto_passes(param, value):
+                    failures.add(row.get("symbol", row.name))
+            catalogue_vetoed.update(failures)
+            filter_stats_detail[param.parameter_key] = len(failures)
+        for param in self.score_calc.filter_params:
+            if param.parameter_key in RATES_SET:
+                continue
+            failures = set()
+            for _, row in universe_filtered.iterrows():
+                value = row.get(param.parameter_key)
+                if value is None or pd.isna(value):
+                    continue
+                if (param.min_value is not None and value < param.min_value) or \
+                   (param.max_value is not None and value > param.max_value):
+                    failures.add(row.get("symbol", row.name))
+            catalogue_vetoed.update(failures)
+            filter_stats_detail[param.parameter_key] = len(failures)
+
+        if catalogue_vetoed:
+            universe_filtered = universe_filtered.loc[
+                ~universe_filtered["symbol"].isin(catalogue_vetoed)
+            ].copy()
+
         vetoed_count = len(self.universe) - len(universe_filtered)
-        print(f"After veto rules (pledging/legal/regulatory): {len(universe_filtered)} stocks "
-              f"({vetoed_count} vetoed)")
+        print(f"After veto rules (pledging/legal/regulatory + catalogue filters/vetoes): "
+              f"{len(universe_filtered)} stocks ({vetoed_count} vetoed)")
+        if filter_stats_detail:
+            detail = ", ".join(f"{k}={v}" for k, v in filter_stats_detail.items() if v)
+            if detail:
+                print(f"  Catalogue filter/veto rejections: {detail}")
 
         if len(universe_filtered) == 0:
             return {
@@ -296,11 +372,26 @@ class WeeklyBacktester:
         # Score requires specific fundamental data columns
         # We'll use available columns; if missing, use default values
         score_columns = [p.parameter_key for p in self.score_calc.score_params]
+        filter_columns = [p.parameter_key for p in self.score_calc.filter_params]
+        veto_columns = [p.parameter_key for p in self.score_calc.veto_params]
 
         # Ensure required columns exist
-        for col in score_columns:
+        for col in score_columns + filter_columns + veto_columns:
             if col not in universe_filtered.columns:
                 universe_filtered[col] = np.nan
+
+        # Apply per-stock filter and veto checks before scoring
+        passed_mask = universe_filtered.apply(
+            lambda row: self.score_calc.apply_filters(row.to_dict())
+            and self.score_calc.apply_vetoes(row.to_dict()),
+            axis=1
+        )
+        filtered_count = len(universe_filtered)
+        universe_filtered = universe_filtered[passed_mask].copy()
+        per_stock_filtered = filtered_count - len(universe_filtered)
+        if per_stock_filtered:
+            print(f"After per-stock catalogue filter/veto check: "
+                  f"{len(universe_filtered)} stocks ({per_stock_filtered} filtered)")
 
         # Calculate raw scores
         universe_filtered["raw_score"] = universe_filtered.apply(
@@ -411,7 +502,7 @@ class WeeklyBacktester:
                 "stcg_tax_rate": self.cost_model.stcg_tax_rate,
                 "total_roundtrip_cost_pct": self.cost_model.total_roundtrip_cost_pct,
             },
-            "parameter_weight_total": sum(p.weight for p in self.score_calc.score_params),
+            "parameter_weight_total": sum(p.weight for p in self.score_calc.enabled_params),
         }
 
         print(f"\n=== Selected {len(selections)} stocks for weekly basket ===")
@@ -581,7 +672,7 @@ if __name__ == "__main__":
     print("  6. Select top N for weekly basket\n")
 
     # Demonstrate parameter catalogue validation
-    from ...platform.config.parameter_catalogue import validate_weight_total
+    from ..config.parameter_catalogue import validate_weight_total
     print(f"Parameter weight total valid: {validate_weight_total()}")
-    print(f"Enabled parameters: {len(__import__('...platform.config.parameter_catalogue', fromlist=['get_enabled_parameters']).get_enabled_parameters())}")
+    print(f"Enabled parameters: {len(get_enabled_parameters())}")
     print("=" * 60)

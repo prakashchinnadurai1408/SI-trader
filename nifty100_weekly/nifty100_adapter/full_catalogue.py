@@ -322,6 +322,96 @@ def rank_complete(frame, evidence, records, model, objective):
     }
 
 
+def score_individual_stock(symbol, records, evidence):
+    """Score a single stock using all 48 catalogue parameters.
+
+    Applies FILTER/VETO eligibility checks and weighted SCORE ranking.
+    Returns a dict with eligibility, score, parameter breakdown, and
+    per-parameter outcomes for the stock.
+    """
+    if not evidence.get("ready"):
+        return {"status": "blocked", "reason": "Catalogue not fully ready"}
+
+    param_rows = {row["key"]: row for row in evidence["parameters"]}
+    symbol_key = symbol
+
+    failed_filters = []
+    failed_vetoes = []
+    missing_parameters = []
+    score_contributions = {}
+    score_total = 0.0
+    score_weight_total = 0.0
+    parameter_outcomes = {}
+
+    for key, definition in PARAMETERS.items():
+        row = param_rows.get(key)
+        is_market = key in MARKET_FACTORS
+        lookup_key = "*" if is_market else symbol_key
+        record = records.get(key, {}).get(lookup_key)
+
+        if record is None:
+            missing_parameters.append(key)
+            parameter_outcomes[key] = {
+                "role": definition.role_type.value,
+                "value": None,
+                "outcome": "No data",
+            }
+            continue
+
+        value = record["value"]
+        role = definition.role_type
+        outcome = None
+
+        if role == RoleType.FILTER and key not in RATES:
+            outcome = "Pass" if passes(key, role, value) else "Excluded"
+            if not passes(key, role, value):
+                failed_filters.append(key)
+        elif role == RoleType.VETO and key not in RATES:
+            outcome = "Pass" if passes(key, role, value) else "Excluded"
+            if not passes(key, role, value):
+                failed_vetoes.append(key)
+        elif role == RoleType.SCORE:
+            within_bounds = ((definition.min_value is None or value >= definition.min_value)
+                             and (definition.max_value is None or value <= definition.max_value))
+            if within_bounds:
+                score_contributions[key] = definition.weight
+                score_total += definition.weight
+            else:
+                score_contributions[key] = 0
+            score_weight_total += definition.weight
+            outcome = f"Weight {definition.weight}" + (" (scored)" if within_bounds else " (outside bounds)")
+        elif role == RoleType.FLAG:
+            outcome = "Flagged" if value else "Clear"
+        elif role == RoleType.ADVISORY:
+            outcome = f"Value: {value}"
+        elif role == RoleType.MARKET_DIAL:
+            outcome = f"Dial: {value}"
+        else:
+            outcome = f"Value: {value}"
+
+        parameter_outcomes[key] = {
+            "role": role.value,
+            "value": value,
+            "outcome": outcome,
+        }
+
+    eligible = not failed_filters and not failed_vetoes and not missing_parameters
+    normalized_score = round(score_total / score_weight_total * 100, 2) if score_weight_total > 0 else 0.0
+
+    return {
+        "symbol": symbol,
+        "status": "blocked" if missing_parameters else ("eligible" if eligible else "excluded"),
+        "score": round(score_total, 2),
+        "normalized_score": normalized_score,
+        "score_weight_total": score_weight_total,
+        "missing_parameters": missing_parameters,
+        "failed_filters": failed_filters,
+        "failed_vetoes": failed_vetoes,
+        "parameter_outcomes": parameter_outcomes,
+        "tradeEligible": eligible,
+    }
+
+
 def full_catalogue(model=None, objective=None):
     frame, market = load_nifty100()
     evidence, records = readiness(frame, market)

@@ -1,4 +1,8 @@
-"""Monthly quality, momentum and low-volatility research backtest."""
+"""Monthly quality, momentum and low-volatility research backtest.
+
+Supports the 48-parameter catalogue from config.parameter_catalogue.
+When catalogue_weights are provided, they override the frozen baseline WEIGHTS.
+"""
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -13,6 +17,11 @@ from .gate_g1 import gate_g1
 from .monthly_inputs import FACTORS, VETOES, load_frozen_inputs
 from .price_experiments import EXPERIMENTS, apply_experiment, ranking_outcomes, trailing_features
 from ..config.indian_cost_model import get_cost_model
+from ..config.parameter_catalogue import (
+    PARAMETER_CATALOGUE,
+    RoleType,
+    get_parameters_by_role,
+)
 
 WEIGHTS = {"quality": 30, "momentum": 30, "volatility": 20, "value": 8,
            "ownership": 6, "earnings_revisions": 3, "news_sentiment": 3}
@@ -23,6 +32,52 @@ TURNOVER_CAP = 0.30
 CASH_BUFFER = 0.05
 STOP = 0.15
 DRAWDOWN_ALERT = 0.10
+
+# Map 48-catalogue SCORE parameters to monthly factor categories.
+# FILTER/VETO params are excluded from monthly factor weights; they are
+# applied as eligibility checks elsewhere in the pipeline.
+_CATALOGUE_TO_FACTOR = {
+    "price_momentum_weekly": "momentum",
+    "price_momentum_daily": "momentum",
+    "price_momentum_monthly": "momentum",
+    "price_momentum_yearly": "momentum",
+    "roe_trend": "quality",
+    "earnings_trend": "earnings_revisions",
+    "pe_ratio_vs_sector": "value",
+    "fii_dii_mf_trend": "ownership",
+    "historical_news_sentiment": "news_sentiment",
+}
+
+# Catalogue params with FILTER/VETO roles that contribute to monthly
+# quality/ownership factor direction (inverse for debt/pledging).
+_CATALOGUE_FILTER_TO_FACTOR = {
+    "debt_equity_ratio": ("quality", -1),
+    "interest_coverage": ("quality", 1),
+    "cash_flow_positive": ("quality", 1),
+    "promoter_holding_pct": ("ownership", 1),
+}
+
+
+def catalogue_monthly_weights() -> dict:
+    """Aggregate 48-catalogue SCORE weights into monthly factor weights.
+
+    Returns a dict matching the WEIGHTS keys, normalized to total 100.
+    Falls back to the frozen baseline WEIGHTS if the catalogue has no
+    usable SCORE parameters.
+    """
+    factor_totals = {key: 0 for key in WEIGHTS}
+    for param in get_parameters_by_role(RoleType.SCORE):
+        factor = _CATALOGUE_TO_FACTOR.get(param.parameter_key)
+        if factor:
+            factor_totals[factor] += param.weight
+    # Also add FILTER-derived quality/ownership signal weights.
+    for key, (factor, sign) in _CATALOGUE_FILTER_TO_FACTOR.items():
+        if key in PARAMETER_CATALOGUE:
+            factor_totals[factor] += abs(PARAMETER_CATALOGUE[key].weight)
+    total = sum(factor_totals.values())
+    if total <= 0:
+        return dict(WEIGHTS)
+    return {key: round(value / total * 100) for key, value in factor_totals.items()}
 
 
 @dataclass
@@ -49,7 +104,9 @@ class Holding:
         return sum(lot.quantity * lot.basis for lot in self.lots) / self.quantity
 
 
-def score_snapshot(snapshot, prices, weights=None):
+def score_snapshot(snapshot, prices, weights=None, catalogue_weights=None):
+    if catalogue_weights is not None:
+        weights = catalogue_weights
     weights = WEIGHTS if weights is None else weights
     frame = snapshot.join(prices[["momentum", "volatility", "close"]], how="left")
     frame = frame.dropna(subset=["momentum", "volatility", "close"])
@@ -230,7 +287,7 @@ def defensive_exposure(observed):
     return 0.25 if month_ends.iloc[-1] < month_ends.mean() else 0.95
 
 
-def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=False, experiment=None):
+def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=False, experiment=None, catalogue_weights=None):
     if decision not in snapshots.index.get_level_values("date"):
         raise ValueError(f"Missing point-in-time Nifty 100 snapshot for {decision.date()}.")
     snapshot = snapshots.loc[decision]
@@ -238,7 +295,7 @@ def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=F
         raise ValueError(f"{decision.date()} requires exactly 100 point-in-time members.")
     if decision not in prices.index.get_level_values("date"):
         raise ValueError(f"Missing decision prices for {decision.date()}.")
-    scores, scoreable = score_snapshot(snapshot, prices.loc[decision], weights)
+    scores, scoreable = score_snapshot(snapshot, prices.loc[decision], weights, catalogue_weights)
     observed = tri.loc[:decision]
     vol = observed.pct_change().tail(63).std() * math.sqrt(252)
     if scoreable < 90 or len(observed) < 64 or pd.isna(vol):
@@ -253,14 +310,14 @@ def month_end_signal(prices, snapshots, tri, decision, weights=None, defensive=F
     return scores, snapshot, float(exposure), scoreable
 
 
-def build_signals(prices, snapshots, tri, dates, complete_months, weights=None, defensive=False, experiment=None):
+def build_signals(prices, snapshots, tri, dates, complete_months, weights=None, defensive=False, experiment=None, catalogue_weights=None):
     sessions = pd.Series(tri.index, index=tri.index.to_period("M"))
     signals = {}
     coverage = []
     for month in complete_months - 1:
         previous = sessions.loc[month]
         decision = previous.iloc[-1] if isinstance(previous, pd.Series) else previous
-        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights, defensive, experiment)
+        scores, snapshot, exposure, scoreable = month_end_signal(prices, snapshots, tri, decision, weights, defensive, experiment, catalogue_weights)
         execution = dates[dates.to_period("M") == month + 1][0]
         signals[execution] = (scores, snapshot, exposure, decision)
         coverage.append({"decision": str(decision.date()), "execution": str(execution.date()),
@@ -282,22 +339,24 @@ def research_window(tri, start, end):
     return complete_months, dates
 
 
-def run(folder, start, end, capital, weights=None, defensive=False):
+def run(folder, start, end, capital, weights=None, defensive=False, catalogue_weights=None):
     hashes, inputs = load_frozen_inputs(folder)
-    return run_prepared(inputs, hashes, start, end, capital, weights, defensive)
+    return run_prepared(inputs, hashes, start, end, capital, weights, defensive, catalogue_weights=catalogue_weights)
 
 
-def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False, experiment=None):
-    if experiment is not None and (experiment not in EXPERIMENTS or weights is not None or defensive):
+def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=False, experiment=None, catalogue_weights=None):
+    if experiment is not None and (experiment not in EXPERIMENTS or weights is not None or defensive or catalogue_weights is not None):
         raise ValueError("Select one price-input experiment against the fixed baseline.")
-    if defensive and weights is not None:
+    if weights is not None and catalogue_weights is not None:
+        raise ValueError("Select either challenger or catalogue weights, not both.")
+    if defensive and (weights is not None or catalogue_weights is not None):
         raise ValueError("Test the defensive overlay separately with the frozen factor weights.")
     manifest, prices, snapshots, tri = inputs
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("Starting capital must be finite and positive.")
     complete_months, dates = research_window(tri, start, end)
     baseline = tri.index[tri.index < dates[0]][-1]
-    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights, defensive, experiment)
+    signals, coverage = build_signals(prices, snapshots, tri, dates, complete_months, weights, defensive, experiment, catalogue_weights)
     week_ends = set(dates.to_series().groupby(dates.to_period("W-FRI")).max())
     ledger = [{"date": baseline, "equity": capital, "cash": capital, "benchmark": float(tri.loc[baseline])}]
     peak_nav = capital
@@ -331,15 +390,17 @@ def run_prepared(inputs, hashes, start, end, capital, weights=None, defensive=Fa
         if day in week_ends and nav <= peak_nav * (1 - DRAWDOWN_ALERT):
             portfolio.alerts.append({"date": str(day.date()), "type": "weekly_drawdown", "value": 1 - nav / peak_nav})
     equity = pd.DataFrame.from_records(ledger).set_index("date")
-    strategy_name = "monthly_defensive" if defensive else "monthly_challenger" if weights is not None else "monthly_baseline"
+    strategy_name = "monthly_defensive" if defensive else "monthly_challenger" if (weights is not None or catalogue_weights is not None) else "monthly_baseline"
     if experiment:
         strategy_name = "monthly_" + experiment
     gate = gate_g1(equity, complete_months, manifest["mode"] == "research" and strategy_name == "monthly_baseline")
     if strategy_name != "monthly_baseline":
         gate["qualification_note"] = "An experimental variant cannot authorize the frozen Gate G1 pilot."
+    effective_weights = catalogue_weights if catalogue_weights is not None else (WEIGHTS if weights is None else weights)
     return equity, {
         "gate_g1": gate, "strategy": strategy_name,
-        "factor_weights": WEIGHTS if weights is None else weights,
+        "factor_weights": effective_weights,
+        "catalogue_weights_used": catalogue_weights is not None,
         "input_sha256": hashes,
         "start_month": str(complete_months[0]), "end_month": str(complete_months[-1]),
         "starting_capital": capital, "coverage": coverage, "trades": portfolio.trades, "alerts": portfolio.alerts,
@@ -360,14 +421,20 @@ def main():
     experiment = parser.add_mutually_exclusive_group()
     experiment.add_argument("--challenger", type=Path, help="Exported AI proposal, evaluated for research only")
     experiment.add_argument("--defensive", action="store_true", help="Test the 10-month trend overlay")
+    experiment.add_argument("--catalogue", action="store_true", help="Use the 48-parameter catalogue weights instead of the frozen baseline")
     args = parser.parse_args()
     try:
         if args.challenger:
             from ..strategy_builder import read_challenger
             weights = read_challenger(args.challenger)
+            catalogue_weights = None
+        elif args.catalogue:
+            weights = None
+            catalogue_weights = catalogue_monthly_weights()
         else:
             weights = None
-        equity, report = run(args.data, args.start, args.end, args.capital, weights, args.defensive)
+            catalogue_weights = None
+        equity, report = run(args.data, args.start, args.end, args.capital, weights, args.defensive, catalogue_weights=catalogue_weights)
         args.out.mkdir(parents=True, exist_ok=False)
         equity.to_csv(args.out / "daily_equity.csv")
         (args.out / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
