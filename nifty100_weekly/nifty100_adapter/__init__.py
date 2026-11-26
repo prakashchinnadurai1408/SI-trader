@@ -6,6 +6,8 @@ from .config.parameter_catalogue import (
     get_enabled_parameters,
     get_total_weight,
     validate_weight_total,
+    RoleType,
+    ParameterDefinition,
 )
 
 __all__ = [
@@ -15,4 +17,6 @@ __all__ = [
     "get_enabled_parameters",
     "get_total_weight",
     "validate_weight_total",
+    "RoleType",
+    "ParameterDefinition",
 ]

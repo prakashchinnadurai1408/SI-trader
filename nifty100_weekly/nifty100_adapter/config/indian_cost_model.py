@@ -25,6 +25,9 @@ class IndianCostModel:
     stt_buy: float = 0.1 / 100   # 0.1% on buy delivery
     stt_sell: float = 0.1 / 100  # 0.1% on sell delivery
 
+    # Legacy-compatible single STT rate (both sides)
+    stt_rate_equity: float = 0.1 / 100  # 0.1% STT per side
+
     # Brokerage (configurable, default ₹20 per order or 0.05%)
     brokerage_rate: float = 0.05 / 100  # 0.05% as default percentage
     brokerage_min: float = 20.0  # Minimum brokerage per order
@@ -71,6 +74,46 @@ class IndianCostModel:
     def total_roundtrip_cost_pct(self) -> float:
         """Total cost percentage for a round trip (buy + sell)."""
         return self.total_buy_cost_pct + self.total_sell_cost_pct
+
+    # Legacy-compatible alias for total_roundtrip_cost_pct (returns percent,
+    # matching legacy `roundtrip_cost_pct` semantics used by sitrader backtester).
+    @property
+    def roundtrip_cost_pct(self) -> float:
+        """Legacy alias returning roundtrip cost as a percentage value."""
+        return self.total_roundtrip_cost_pct * 100
+
+    def calculate_buy_costs(self, price: float, quantity: int) -> Dict[str, float]:
+        """Legacy-format buy-side cost breakdown."""
+        stt = self.stt_buy * price * quantity
+        brokerage = self.brokerage_rate * price * quantity
+        gst = brokerage * self.gst_on_brokerage
+        sebi = self.sebi_charge * price * quantity
+        stamp = self.stamp_duty_buy * price * quantity
+        return {
+            "stt": stt,
+            "brokerage": brokerage,
+            "gst": gst,
+            "sebi": sebi,
+            "stamp_duty": stamp,
+            "total": stt + brokerage + gst + sebi + stamp,
+        }
+
+    def calculate_sell_costs(self, price: float, quantity: int) -> Dict[str, float]:
+        """Legacy-format sell-side cost breakdown."""
+        stt = self.stt_sell * price * quantity
+        brokerage = self.brokerage_rate * price * quantity
+        gst = brokerage * self.gst_on_brokerage
+        sebi = self.sebi_charge * price * quantity
+        dp = self.dp_charge_sell
+        return {
+            "stt": stt,
+            "brokerage": brokerage,
+            "gst": gst,
+            "sebi": sebi,
+            "dp_charge": dp,
+            "total": stt + brokerage + gst + sebi + dp,
+        }
+    # ------------------------------------------------------------------
 
     def calculate_stcg(self, buy_price: float, sell_price: float, quantity: int) -> float:
         """Calculate short-term capital gain tax."""
@@ -130,6 +173,7 @@ class IndianCostModel:
             "pre_tax_pnl": pre_tax_pnl,
             "stcg_tax": stcg_tax,
             "net_after_tax": net_after_tax,
+            "net_return_pct": (net_after_tax / (buy_price * quantity) * 100) if buy_price > 0 else 0.0,
             "breakdown": {
                 "gross_pnl": gross_pnl,
                 "stt": stt,
