@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 (async () => {
   const folder = mkdtempSync(path.join(tmpdir(), 'si-browser-'));
   const server = spawn(process.env.PYTHON || 'python', ['-B', '-u', '-m', 'tests.browser_server'], {
-    env: {...process.env, SI_TRADER_MODE:'local', SI_TRADER_LLM_HOME:folder, SI_TRADER_STRATEGY_BUNDLE:''}, stdio:['ignore','pipe','pipe']
+    env: {...process.env, SI_TRADER_MODE:'local', SI_TRADER_LLM_HOME:folder, SI_TRADER_RESEARCH_STORE:path.join(folder,'research'), SI_TRADER_STRATEGY_BUNDLE:''}, stdio:['ignore','pipe','pipe']
   });
   let browser; let logs = '';
   server.stderr.on('data', data => { logs += data.toString(); });
@@ -37,6 +37,22 @@ const assert = require('node:assert/strict');
     await page.getByRole('button',{name:'Check data readiness',exact:true}).click();
     await page.getByText('Research bundle needs attention.',{exact:true}).waitFor();
     await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=390));
+    await page.getByRole('button',{name:'Strategy workspace',exact:true}).click();
+    await page.getByRole('button',{name:'Load strategy candidates',exact:true}).click();
+    await page.locator('#workspace-plan [name=candidate] option').nth(1).waitFor({state:'attached'});
+    await page.getByRole('button',{name:'Run Arena review',exact:true}).click();
+    await page.getByText('Historical research bundle not configured; no performance or ranking edge has been measured.',{exact:true}).waitFor();
+    await page.locator('#workspace-plan [name=candidate]').selectOption({index:1});
+    await page.getByRole('button',{name:'Build risk-sized paper plan',exact:true}).click();
+    await page.getByRole('button',{name:'Simulate approved paper plan',exact:true}).click();
+    await page.getByText('SIMULATED',{exact:true}).waitFor();
+    assert(await page.getByRole('button',{name:'Paper plan consumed',exact:true}).isDisabled());
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=390));
+    await page.getByRole('button',{name:'Halt paper execution',exact:true}).click();
+    await page.getByRole('button',{name:'Resume paper execution',exact:true}).waitFor();
+    mkdirSync('test-results',{recursive:true});
+    await page.screenshot({path:'test-results/strategy-workspace.png',fullPage:true});
+    await page.getByRole('button',{name:'Resume paper execution',exact:true}).click();
     await page.goto(urls.hosted);
     await page.getByText('Hosted workspace · operator sign-in',{exact:true}).waitFor();
     assert(!await page.getByText('Local demo.',{exact:false}).count());
@@ -49,7 +65,7 @@ const assert = require('node:assert/strict');
     assert.deepEqual(errors,[]);
     mkdirSync('test-results',{recursive:true});
     await page.screenshot({path:'test-results/hosted-signin.png',fullPage:true});
-    console.log('Browser PASS: local sign-in, monthly validation/readiness, mobile layout, HTTPS hosted sign-in/error/logout.');
+    console.log('Browser PASS: sign-in, monthly validation, strategy hub -> Arena -> risk plan -> paper fills -> halt/resume, mobile layout, HTTPS hosted sign-in/error/logout.');
   } finally {
     if(browser) await browser.close();
     server.kill();

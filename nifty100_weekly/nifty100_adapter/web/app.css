@@ -166,6 +166,7 @@ td input { max-width: 90px; }
 .desk-builder { max-width: 880px; }
 .desk-builder .desk-card-header { padding: 0 0 12px; }
 .desk-builder form { gap: 8px; }
+.desk-builder select { width: 100%; padding: 12px; font: inherit; color: inherit; background: white; border: 1px solid #b8bfcc; border-radius: 8px; }
 .desk-builder textarea {
   font: inherit; width: 100%; padding: 12px; color: inherit;
   background: #fff; border: 1px solid #b8bfcc; border-radius: 8px; resize: vertical;

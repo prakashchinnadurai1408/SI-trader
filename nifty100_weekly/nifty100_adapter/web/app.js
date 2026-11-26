@@ -1,3 +1,4 @@
+import {workspaceView} from "./workspace.js";
 const app = document.querySelector("#app");
 const paper = '<span class="badge">PAPER MODE</span>';
 const demoEmail = "trader@example.com";
@@ -14,6 +15,8 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
+  workspace: null,
+  workspaceInputs: {symbols: "", candidate: "", capital: 25000, risk: 500, buffer: 10, evalStart: "2023-01-01", evalEnd: "2024-12-31", holdoutStart: "2025-01-01", holdoutEnd: "2025-12-31", compareHoldout: false},
   hosted: false, authLoading: true, authEmail: "",
   parameterPreview: null, parameterSymbol: "", parameterReportMessage: "", preferParameterPreview: false,
   replayInputs: {bundleId: "", decision: "", isin: ""}, replayResult: null, replayMessage: "", replayError: false,
@@ -840,7 +843,7 @@ function arenaReview(tab) {
 }
 
 function dashboard() {
-  const primary = [["home", "Home"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["feeds", "Data feeds"], ["portfolio", "Portfolio"]];
+  const primary = [["home", "Home"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["workspace", "Strategy workspace"], ["feeds", "Data feeds"], ["portfolio", "Portfolio"]];
   const tools = [["lab", "Strategy Lab"], ["watchlist", "Top 10 watchlist"], ["full", "Full 48 research"], ["committee", "Three-agent review"], ["execution", "Execution"]];
   const titles = {weekly: "Weekly strategy", monthly: "Monthly strategy"};
   const title = titles[state.tab] || [...primary, ...tools].find(([key]) => key === state.tab)[1];
@@ -875,6 +878,7 @@ function dashboard() {
       </header>
       ${arenaReview(state.tab)}
       ${state.tab === "monthly" ? `<div class="desk-monthly">${builder()}${monthlyComparison()}${researchReplay()}${parameterRunPanel(state.researchProposal?.parameterRunReport)}</div>` :
+        state.tab === "workspace" ? feedback() + workspaceView(state.workspace, state.workspaceInputs, state.busy, {escapeHtml,gridTable,cash,count,percent}) :
         state.tab === "portfolio" ? portfolio() : state.tab === "execution" ? executionView() :
         state.tab === "watchlist" ? watchlistView() : state.tab === "feeds" ? evidenceView() :
         state.tab === "full" ? fullCatalogueView() : state.tab === "committee" ? committeeView() :
@@ -919,6 +923,7 @@ async function request(path, body) {
 }
 
 app.addEventListener("input", event => {
+  if (event.target.form?.id.startsWith("workspace-")) state.workspaceInputs[event.target.name] = event.target.type === "checkbox" ? event.target.checked : event.target.type === "number" ? Number(event.target.value) : event.target.value;
   if (event.target.id === "research-objective") state.researchObjective = event.target.value;
   if (event.target.id === "committee-holdings") state.committeeHoldings = event.target.value;
   if (event.target.form?.id === "research-replay") state.replayInputs[event.target.name] = event.target.value;
@@ -952,6 +957,10 @@ app.addEventListener("change", event => {
 app.addEventListener("submit", async event => {
   event.preventDefault();
   const form = new FormData(event.target);
+  if (event.target.id.startsWith("workspace-") && !state.busy) {
+    await workspaceRequest({...state.workspaceInputs, model: config.model, action: event.target.id.split("-")[1]});
+    return;
+  }
   if (event.target.id === "signin") {
     if (state.hosted) {
       state.authEmail = form.get("email");
@@ -1188,6 +1197,9 @@ app.addEventListener("submit", async event => {
 app.addEventListener("click", async event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   switch (action) {
+    case "workspace-refresh": await workspaceRequest({action:"status"}); break;
+    case "workspace-halt": await workspaceRequest({action:state.workspace?.ledger.halted?"resume":"halt"}); break;
+    case "workspace-paper": await workspaceRequest({action:"paper",planId:state.workspace?.plan.id}); break;
     case "logout":
       if (state.busy) break;
       try {
@@ -1365,6 +1377,7 @@ app.addEventListener("click", async event => {
       show();
       document.querySelector(".desk-header h1").focus();
       if (state.tab === "weekly" || ["portfolio", "execution"].includes(state.tab)) refreshBroker();
+      if (state.tab === "workspace") await workspaceRequest({action:"status"});
       break;
     case "refresh":
       await refreshBroker();
@@ -1400,6 +1413,13 @@ app.addEventListener("click", async event => {
 
   }
 });
+
+async function workspaceRequest(payload) {
+  state.busy = true; show("Working on the strategy workspace…");
+  try { state.workspace = await request("/api/workspace", payload); show(); }
+  catch(error) { show(error.message, true); }
+  finally { state.busy = false; render(); }
+}
 
 render();
 fetch("/api/auth/session").then(response => {

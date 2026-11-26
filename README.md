@@ -2,6 +2,8 @@
 
 A local research and paper-trading workspace for Nifty 100. It includes an NSE watchlist, a 48-parameter feed coverage screen, Ollama strategy research, and a monthly backtest and paper pilot.
 
+**Strategy workspace** connects the migrated strategy hub, Arena review, risk-sized plan preview and paper execution pipeline. It supports existing MA templates or the saved AI model, shows evidence gaps explicitly, and persists simulated fills and audit reports. No live broker execution is exposed. See the [workspace journey](nifty100_weekly/USER_JOURNEY.md#strategy-workspace-migrated-hub-arena-and-paper-orders).
+
 ## Repository and source layout
 
 The maintained repository is [prakashchinnadurai1408/SI-trader](https://github.com/prakashchinnadurai1408/SI-trader), on **main**. Both trading source histories are consolidated here.

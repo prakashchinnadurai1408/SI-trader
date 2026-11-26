@@ -48,9 +48,17 @@ class HostedAPI(unittest.TestCase):
         return headers["Set-Cookie"].split(";", 1)[0]
 
     def test_api_requires_auth_even_when_ui_is_bypassed(self):
-        for path in ("/api/llm-save", "/api/broker", "/api/monthly-comparison", "/api/strategy"):
+        for path in ("/api/llm-save", "/api/broker", "/api/monthly-comparison", "/api/strategy", "/api/workspace"):
             with self.subTest(path=path):
                 self.assertEqual(self.request(path, {})[0], 401)
+
+    def test_workspace_halt_blocks_weekly_api_without_browser_checks(self):
+        cookie = self.login()
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"SI_TRADER_RESEARCH_STORE": folder}), patch("nifty100_weekly.nifty100_adapter.web_app.installed_models", return_value=["fixture"]):
+            self.assertEqual(self.request("/api/workspace", {"action": "halt"}, cookie)[0], 200)
+            status, _, body = self.request("/api/strategy", {"model": "fixture", "objective": "Fixture", "maxPositions": 5, "execution": {}}, cookie)
+            self.assertEqual(status, 400)
+            self.assertIn("halted", json.loads(body)["error"])
 
     def test_login_readiness_logout_revokes_cookie(self):
         cookie = self.login()

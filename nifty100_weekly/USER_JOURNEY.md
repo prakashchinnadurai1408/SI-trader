@@ -21,6 +21,18 @@ Open [SI-Trader](http://127.0.0.1:8765/) on the machine running the app. This jo
 12. On the same page, find **Historical backtest**. Enter the first and last unseen holdout months and starting capital. Both dates must be in completed historical months; the latest allowed month is shown below the date fields. Select **Check data readiness**. If no bundle is configured, prepare the historical inputs using the [monthly backtest guide](MONTHLY_BACKTEST.md), set `SI_TRADER_STRATEGY_BUNDLE` for the app process, and restart it.
 13. Once readiness passes, select **Run monthly comparison**. Select **Include an AI factor challenger** to include the current proposal. If no proposal exists, the comparison checks historical data readiness and then generates one using the saved LLM before running. Compare net total return, net CAGR, drawdown, downside capture, and recovery. Review results alongside Nifty 100 TRI and the baseline's Gate G1 status.
 
+## Strategy workspace: migrated hub, Arena and paper orders
+
+Open **Strategy workspace** from the main navigation. This is a separate, server-owned paper ledger; InvestRight account panels continue to show read-only broker data.
+
+1. Choose existing MA templates or your saved AI model, optionally enter up to five Nifty 100 symbols, and select **Load strategy candidates**. Blank symbols use the five highest-turnover covered stocks passing the current-session liquidity screen. This is a research sample, not a buy recommendation. AI generation uses the existing LLM Configuration connection, can consume provider quota, and fails explicitly rather than silently substituting templates.
+2. Enter ordered evaluation and subsequent holdout dates and select **Run Arena review**. With no configured historical bundle, every candidate remains unmeasured. With a research bundle, the server slices evaluation data before ranking. Holdout data is loaded only when its comparison checkbox is selected; it does not select the finalists. The existing backtester uses price-derived weights, not all 48 fundamental/news factors or a calibrated return forecast.
+3. Choose a candidate and paper capital, per-trade risk and cash buffer. Select **Build risk-sized paper plan** to call the migrated execution bridge and BudgetManager. Inspect share counts, reference entry, stop, target scenario and blocking decisions. Numeric model exit percentages must satisfy risk checks; free-text exits cannot become orders.
+4. Select **Simulate approved paper plan** to call the paper execution pipeline. It has no broker adapter and the API rejects live mode. Quotes are NSE reference closes; no actual market order is placed and no MA trigger is claimed. Plans expire after ten minutes and execute at most once. Buy-side modeled fees reduce paper cash. Five-position and capital-buffer checks apply.
+5. Inspect simulated positions/fills and recent audit report IDs on the same screen. **Halt paper execution** invalidates a pending plan and blocks new workspace plans/fills and weekly paper generation. Resume explicitly. Halting does not cancel broker orders or liquidate positions. Paper fills, cash and halt state persist in `SI_TRADER_RESEARCH_STORE/workspace` (default `~/.si-trader/research/workspace`); plans and loaded candidates reset on process restart. The starting capital cannot change once this ledger has fills.
+
+Audit JSON files are stored privately below that workspace's `reports` directory. They label paper mode and preserve research/plan/execution records for later inspection. A missing dataset or an unmeasured review never establishes profitability or readiness for live trading.
+
 ## Restart the local app
 
 Run in PowerShell when port 8765 is free.
