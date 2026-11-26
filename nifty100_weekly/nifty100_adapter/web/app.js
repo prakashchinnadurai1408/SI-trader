@@ -1172,7 +1172,7 @@ app.addEventListener("submit", async event => {
     show("AI strategy configuration saved.");
   } else if (event.target.id === "strategy" && !state.busy && !state.halted && config.model) {
     state.busy = true;
-    show("Fetching NSE data, generating the basket, and sizing it to available cash.");
+    show("Fetching NSE data, generating the basket, and sizing it to available cash. Cloud models can take several minutes; keep this page open.");
     try {
       const result = await request("/api/strategy", config);
       if (state.halted) return;

@@ -11,7 +11,7 @@ from pathlib import Path
 from .deployment import Runtime, Sessions
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
-from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models
+from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models, ProviderUnavailable
 from .ai_strategy import generate_plan, installed_models, test_model
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
@@ -253,6 +253,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self.send_error(404)
+        except ProviderUnavailable as error:
+            self.send_json(error.status, {"error": str(error), "code": error.code})
         except (ValueError, OSError) as error:
             self.send_json(400, {"error": str(error)})
         except Exception:
