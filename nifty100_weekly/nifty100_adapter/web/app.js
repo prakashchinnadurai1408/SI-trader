@@ -906,7 +906,32 @@ function show(message = "", error = false) {
   render();
 }
 
+const backgroundResearch = new Set(["/api/strategy", "/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test"]);
 async function request(path, body) {
+  if (!backgroundResearch.has(path)) return directRequest(path, body);
+  let job = await directRequest("/api/research-jobs", {route: path, body,
+    requestId: crypto.randomUUID().replaceAll("-", "")});
+  while (job.state === "queued" || job.state === "running") {
+    if (state.busy && !state.halted) {
+      const details = job.details || {};
+      const coverage = details.parametersEvaluated == null ? "" :
+        ` · ${details.parametersEvaluated}/${details.parametersTotal} parameters checked; ${details.parametersCovered}/${details.parametersTotal} fully covered`;
+      state.message = `${job.stage} · ${job.elapsedSeconds}s elapsed${coverage}`;
+      state.error = false;
+      render();
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    job = await directRequest("/api/research-jobs/status", {id: job.id});
+  }
+  if (job.state !== "succeeded") {
+    const result = job.result || {};
+    throw new Error((result.error || "Research stopped. Retry or check LLM Configuration.") +
+      (result.requestId ? " Reference: " + result.requestId : ""));
+  }
+  return job.result;
+}
+
+async function directRequest(path, body) {
   const response = await fetch(path, {
     method: "POST",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
@@ -1402,13 +1427,22 @@ app.addEventListener("click", async event => {
     case "halt":
       state.halted = true;
       sessionStorage.setItem("si-trader-halted", "true");
-      show("Paper strategy runs are paused in this tab.");
+      show("Requesting a server halt for paper execution…");
+      try {
+        state.workspace = await request("/api/workspace", {action: "halt"});
+        show("Paper execution halted on the server. Running research cannot create new paper fills.");
+      } catch (error) {
+        show("This tab is paused, but the server halt could not be confirmed. " + error.message, true);
+      }
       break;
     case "resume":
       if (state.busy) return;
-      state.halted = false;
-      sessionStorage.removeItem("si-trader-halted");
-      show("Paper dashboard controls restored.");
+      try {
+        state.workspace = await request("/api/workspace", {action: "resume"});
+        state.halted = false;
+        sessionStorage.removeItem("si-trader-halted");
+        show("Paper dashboard controls restored.");
+      } catch (error) { show(error.message, true); }
       break;
 
   }

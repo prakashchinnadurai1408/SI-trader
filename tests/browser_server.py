@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from nifty100_weekly.nifty100_adapter.deployment import Runtime, password_hash
 from nifty100_weekly.nifty100_adapter.web_app import create_server
+from nifty100_weekly.nifty100_adapter.llm_connections import ProviderTimeout
 
 if __name__ == "__main__":
     root = Path(os.environ["SI_TRADER_LLM_HOME"])
@@ -29,7 +30,7 @@ if __name__ == "__main__":
     patch("nifty100_weekly.nifty100_adapter.full_catalogue.pe_data", return_value={}).start()
     patch("nifty100_weekly.nifty100_adapter.full_catalogue.ownership_data", return_value={}).start()
     patch("nifty100_weekly.nifty100_adapter.full_catalogue.collect_public_records", return_value=({},[])).start()
-    patch("nifty100_weekly.nifty100_adapter.web_app.generate_plan", return_value={"basket":[{"symbol":"TEST099","price":199.,"weight":20,"rationale":"Fixture"}],"title":"Fixture","thesis":"Fixture"}).start()
+    patch("nifty100_weekly.nifty100_adapter.web_app.generate_plan", side_effect=[ProviderTimeout("The AI provider timed out. Test/select another model in LLM Configuration."), {"basket":[{"symbol":"TEST099","price":199.,"weight":20,"rationale":"Fixture"}],"title":"Fixture","thesis":"Fixture"}]).start()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
     cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())

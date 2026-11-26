@@ -5,6 +5,7 @@ import json
 from statistics import median
 
 from .ai_strategy import ollama
+from .research_jobs import progress
 from .backtest.monthly_backtester import WEIGHTS
 
 OBJECTS = {"type": "object", "additionalProperties": False}
@@ -123,6 +124,7 @@ def build_research_strategy(model, objective):
         "current_evidence": {"as_of": coverage["market"]["asOf"], "observed_required_counts": observed, "observed_medians": medians},
         "objective": objective,
     }
+    progress("Maker agent: building a monthly hypothesis")
     proposal = agent(
         model,
         "You propose a testable long-only monthly Nifty 100 factor challenger, not stock orders. "
@@ -146,6 +148,7 @@ def build_research_strategy(model, objective):
     if tilt in ("quality", "momentum", "volatility") and weights[tilt] <= WEIGHTS[tilt]:
         tilt = "balanced"
 
+    progress("Checker agent: reviewing the monthly hypothesis")
     review = agent(
         model,
         "Review this candidate as a skeptical research reviewer. Pick two to four distinct material risks "

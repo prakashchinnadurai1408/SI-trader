@@ -7,7 +7,8 @@ import os
 from urllib.parse import urlsplit
 from time import perf_counter
 
-from .llm_connections import chat, profiles
+from .llm_connections import chat, profiles, provider_timeout
+from .research_jobs import progress
 
 
 def ollama(path, payload=None):
@@ -19,7 +20,10 @@ def ollama(path, payload=None):
     if base.scheme not in ("http", "https") or not base.hostname or base.username or base.password or base.query or base.fragment or base.path not in ("", "/"):
         raise ValueError("SI_TRADER_OLLAMA_URL must be an HTTP(S) origin without credentials or a path.")
     client = http.client.HTTPSConnection if base.scheme == "https" else http.client.HTTPConnection
-    connection = client(base.hostname, base.port, timeout=180)
+    timeout = provider_timeout() if payload is not None else 10
+    if payload is not None:
+        progress("Waiting for local AI model", model=payload.get("model"), providerTimeoutSeconds=timeout)
+    connection = client(base.hostname, base.port, timeout=timeout)
     try:
         method = "GET" if payload is None else "POST"
         body = None if payload is None else json.dumps(payload)

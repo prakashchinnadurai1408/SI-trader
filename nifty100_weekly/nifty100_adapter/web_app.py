@@ -5,10 +5,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import logging
+from hashlib import sha256
 from uuid import uuid4
 import re
 from pathlib import Path
 from .deployment import Runtime, Sessions
+from .research_jobs import ResearchJobs, JobBusy
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
 from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models, ProviderUnavailable
@@ -105,6 +107,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.server.sessions.logout(self.headers.get("Cookie"))
                 self.send_json(200, {"authenticated": False}, {"Set-Cookie": self.server.sessions.cookie("", clear=True)})
                 return
+            owner = sha256((self.server.sessions.token(self.headers.get("Cookie")) if self.server.runtime.hosted else "local").encode()).hexdigest()
+            if self.path == "/api/research-jobs":
+                route, body = payload.get("route"), payload.get("body")
+                server = self.server
+                job = server.research_jobs.start(owner, route, body, payload.get("requestId"),
+                    lambda: execute_research(server, route, body))
+                self.send_json(202, job)
+                return
+            if self.path == "/api/research-jobs/status":
+                self.send_json(200, self.server.research_jobs.status(owner, payload.get("id")))
+                return
+            self._dispatch(payload)
+        except JobBusy as error:
+            self.send_json(429, {"error": str(error)})
+        except ProviderUnavailable as error:
+            self.send_json(error.status, {"error": str(error), "code": error.code})
+        except (ValueError, OSError) as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception:
+            request_id = uuid4().hex[:12]
+            logging.getLogger(__name__).exception("API request %s failed at %s", request_id, self.path)
+            self.send_json(500, {"error": "The server could not complete this request. Check the server log using the reference below.", "requestId": request_id})
+
+
+    def _dispatch(self, payload):
+        try:
             if self.path == "/api/holdings":
                 self.send_json(200, {"count": holdings_count()})
             elif self.path == "/api/broker":
@@ -253,6 +281,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self.send_error(404)
+        except JobBusy as error:
+            self.send_json(429, {"error": str(error)})
         except ProviderUnavailable as error:
             self.send_json(error.status, {"error": str(error), "code": error.code})
         except (ValueError, OSError) as error:
@@ -261,6 +291,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             request_id = uuid4().hex[:12]
             logging.getLogger(__name__).exception("API request %s failed at %s", request_id, self.path)
             self.send_json(500, {"error": "The server could not complete this request. Check the server log using the reference below.", "requestId": request_id})
+
+
+def execute_research(server, route, body):
+    # Reuse validated dispatch without keeping a browser socket or credentials in the worker.
+    handler = object.__new__(DashboardHandler)
+    handler.server, handler.path = server, route
+    captured = []
+    handler.send_json = lambda status, result, headers=None: captured.append((status, result))
+    handler.send_error = lambda status: captured.append((status, {"error": "Unknown research operation."}))
+    handler._dispatch(body)
+    return captured[0] if captured else (500, {"error": "Research did not return a result."})
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -277,6 +318,7 @@ def create_server(host="127.0.0.1", port=8765, runtime=None):
     server = DashboardServer((host, port), DashboardHandler)
     server.runtime = runtime
     server.sessions = Sessions()
+    server.research_jobs = ResearchJobs()
     from .web_workspace import WebWorkspace
     server.workspace = WebWorkspace()
     return server

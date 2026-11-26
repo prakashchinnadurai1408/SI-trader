@@ -4,7 +4,8 @@ import http.client
 import json
 import os
 import tempfile
-from threading import Thread
+from threading import Thread, Event
+import time
 import unittest
 from unittest.mock import patch
 
@@ -43,15 +44,47 @@ class WeeklyAPI(unittest.TestCase):
     def close_server(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join()
 
-    def request(self, route="/api/strategy"):
+    def request(self, route="/api/strategy", body=None):
         client = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
-        body = {"model": "fixture", "objective": "Fixture weekly study", "maxPositions": 5,
+        body = body if body is not None else {"model": "fixture", "objective": "Fixture weekly study", "maxPositions": 5,
                 "execution": {"funding": "paper", "paperCapital": 500000, "cashBuffer": 10, "scenarioMove": 5, "paperAuto": True}}
         client.request("POST", route, json.dumps(body), {"Origin":f"http://127.0.0.1:{self.server.server_port}", "Content-Type":"application/json"})
         response = client.getresponse()
         result = response.status, json.loads(response.read())
         client.close()
         return result
+
+    def test_background_run_returns_promptly_and_halt_blocks_late_fills(self):
+        entered, release = Event(), Event()
+        plan = self.planner.return_value
+        def slow_plan(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+            return plan
+        self.planner.side_effect = slow_plan
+        payload = {"route": "/api/strategy", "requestId": "a"*32, "body": {
+            "model": "fixture", "objective": "Fixture", "maxPositions": 5,
+            "execution": {"funding": "paper", "paperCapital": 500000, "cashBuffer": 10, "scenarioMove": 5, "paperAuto": True}}}
+        try:
+            started = time.monotonic()
+            status, job = self.request("/api/research-jobs", payload)
+            self.assertEqual(status, 202)
+            self.assertLess(time.monotonic()-started, 2)
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(self.request("/api/research-jobs", payload)[1]["id"], job["id"])
+            running = self.request("/api/research-jobs/status", {"id": job["id"]})[1]
+            self.assertEqual(running["details"]["parametersEvaluated"], 48)
+            self.server.workspace.dispatch({"action": "halt"})
+        finally:
+            release.set()
+        for _ in range(100):
+            result = self.request("/api/research-jobs/status", {"id": job["id"]})[1]
+            if result["state"] == "failed":
+                break
+            time.sleep(.01)
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("halted", result["result"]["error"])
+        self.assertEqual(self.planner.call_count, 1)
 
     def test_migrated_catalogue_generates_weekly_paper_basket(self):
         self.assertNotIn("price_momentum_daily", PARAMETERS)
