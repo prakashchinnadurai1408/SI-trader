@@ -11,6 +11,7 @@ import http.client
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from .research_jobs import progress
 from uuid import uuid4
 
 PROVIDERS = {
@@ -40,11 +41,11 @@ class ProviderTimeout(ProviderUnavailable):
 
 def provider_timeout():
     try:
-        seconds = int(os.environ.get("SI_TRADER_LLM_TIMEOUT_SECONDS", "180"))
+        seconds = int(os.environ.get("SI_TRADER_LLM_TIMEOUT_SECONDS", "600"))
     except ValueError:
-        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 300.") from None
-    if not 30 <= seconds <= 300:
-        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 300.")
+        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 1800.") from None
+    if not 30 <= seconds <= 1800:
+        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 1800.")
     return seconds
 
 class Blob(ctypes.Structure):
@@ -201,6 +202,7 @@ def chat(identifier, payload):
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
     timeout = provider_timeout()
+    progress("Waiting for AI provider", model=row["model"], providerTimeoutSeconds=timeout)
     try:
         with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             raw = response.read(2_000_001)

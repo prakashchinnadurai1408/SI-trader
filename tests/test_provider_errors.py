@@ -13,7 +13,7 @@ class ProviderErrors(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(patch.dict(os.environ, {"SI_TRADER_LLM_TIMEOUT_SECONDS": "180"}))
+        self.stack.enter_context(patch.dict(os.environ, {"SI_TRADER_LLM_TIMEOUT_SECONDS": "600"}))
         connection = self.stack.enter_context(patch.object(llm, "connection"))
         connection.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = {
             "provider": "nvidia", "model": "z-ai/glm-5.3-flash", "secret": b"fixture",
@@ -31,13 +31,13 @@ class ProviderErrors(unittest.TestCase):
         self.assertEqual(body["max_tokens"], 4096)
         self.assertEqual(body["reasoning_effort"], "low")
         self.assertTrue(body["chat_template_kwargs"]["clear_thinking"])
-        self.assertEqual(self.opener.open.call_args.kwargs["timeout"], 180)
+        self.assertEqual(self.opener.open.call_args.kwargs["timeout"], 600)
 
     def test_custom_deadline_and_invalid_configuration(self):
         with patch.dict(os.environ, {"SI_TRADER_LLM_TIMEOUT_SECONDS": "240"}):
             llm.chat("fixture", self.payload)
             self.assertEqual(self.opener.open.call_args.kwargs["timeout"], 240)
-        for value in ("0", "301", "nan"):
+        for value in ("0", "1801", "nan"):
             with self.subTest(value=value), patch.dict(os.environ, {"SI_TRADER_LLM_TIMEOUT_SECONDS": value}):
                 with self.assertRaises(ValueError):
                     llm.provider_timeout()

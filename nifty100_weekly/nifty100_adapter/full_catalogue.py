@@ -15,6 +15,7 @@ from .data.nse_market import MARKET_TIME, load_nifty100
 from .data.provider_sources import consolidate, load_sources
 from .data.public_research import collect_public_records
 from .strategy_builder import agent
+from .research_jobs import progress
 
 MARKET_FACTORS = {
     "international_war_situation", "government_news", "political_incidents",
@@ -103,6 +104,7 @@ def native_records(frame, members, day, cutoff):
 
 
 def readiness(frame, market, provider_path=None, now=None):
+    progress("Fetching research sources in parallel", parametersTotal=len(PARAMETERS))
     day = date.fromisoformat(market["asOf"])
     cutoff = min(now or datetime.now(MARKET_TIME), datetime.combine(day, time.max, tzinfo=MARKET_TIME))
     members = {row.symbol: row for row in frame.itertuples(index=False)}
@@ -166,6 +168,7 @@ def readiness(frame, market, provider_path=None, now=None):
             "ready": count == required and not invalid and not conflicts,
         })
     complete = sum(item["ready"] for item in parameters)
+    progress("Evaluated all catalogue parameters", parametersTotal=len(PARAMETERS), parametersEvaluated=len(parameters), parametersCovered=complete)
     return {
         "ready": complete == len(PARAMETERS) and not errors,
         "complete": complete, "total": len(PARAMETERS), "market": market,
