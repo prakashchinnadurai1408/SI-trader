@@ -178,7 +178,7 @@ def chat(identifier, payload):
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
     try:
-        with build_opener(NoRedirect()).open(request, timeout=180) as response:
+        with build_opener(NoRedirect()).open(request, timeout=60) as response:
             raw = response.read(2_000_001)
         if len(raw) > 2_000_000:
             raise ValueError("Provider response exceeded the supported size.")

@@ -14,7 +14,7 @@ PROTECTED = {
     "promoter_pledging_pct", "legal_cases_directors", "legal_cases_company_promoters", "regulatory_actions",
     "stt_rate_equity", "stcg_tax_rate", "brokerage_rate",
 }
-LIVE_COLUMNS = {"price_momentum_daily", "price_momentum_weekly"}
+LIVE_COLUMNS = {"price_momentum_weekly"}
 COST_INPUTS = {"stt_rate_equity", "stcg_tax_rate", "brokerage_rate"}
 
 

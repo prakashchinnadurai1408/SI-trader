@@ -27,7 +27,6 @@ THRESHOLDS = {
     "promoter_holding_pct", "promoter_pledging_pct",
 }
 NATIVE = {
-    "price_momentum_daily": "price_momentum_daily",
     "price_momentum_weekly": "price_momentum_weekly",
     "liquidity_floor": "daily_turnover_crore",
 }

@@ -244,12 +244,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
         except (ValueError, OSError) as error:
             self.send_json(400, {"error": str(error)})
+        except Exception as error:  # defensive: never leave the connection empty
+            self.send_json(500, {"error": "Internal server error."})
 
 
 class DashboardServer(ThreadingHTTPServer):
     def get_request(self):
         connection, address = super().get_request()
-        connection.settimeout(30)
+        connection.settimeout(90)
         return connection, address
 
 
