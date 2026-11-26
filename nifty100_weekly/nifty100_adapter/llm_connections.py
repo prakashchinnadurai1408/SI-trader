@@ -5,6 +5,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import socket
 import sqlite3
 import re
 import http.client
@@ -25,6 +26,9 @@ PROVIDERS = {
     "kimi": ("Kimi", "https://api.moonshot.ai/v1", "openai"),
     "custom": ("Custom OpenAI-compatible", "", "openai"),
 }
+
+PROVIDER_TIMEOUT = 120
+
 
 class Blob(ctypes.Structure):
     _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
@@ -178,7 +182,7 @@ def chat(identifier, payload):
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
     try:
-        with build_opener(NoRedirect()).open(request, timeout=60) as response:
+        with build_opener(NoRedirect()).open(request, timeout=PROVIDER_TIMEOUT) as response:
             raw = response.read(2_000_001)
         if len(raw) > 2_000_000:
             raise ValueError("Provider response exceeded the supported size.")
@@ -193,9 +197,20 @@ def chat(identifier, payload):
     except HTTPError as error:
         if error.code == 404:
             raise ValueError("Provider could not find this model or API route (HTTP 404). Edit the connection, load available models, and check the API base URL.") from None
+        if error.code == 503:
+            detail = ""
+            try:
+                payload = json.loads(error.read(2000))
+                detail = str(payload.get("error", {}).get("message") or payload.get("detail") or "")[:200]
+            except Exception:
+                detail = ""
+            suffix = f" Provider says: {detail}" if detail else ""
+            raise ValueError(f"The provider is temporarily unavailable for this model (HTTP 503). Try another model or run the strategy again later.{suffix}") from None
         raise ValueError(f"Provider returned HTTP {error.code}. Check the key, model access, quota and API endpoint.") from None
+    except (TimeoutError, socket.timeout):
+        raise ValueError(f"The provider accepted the request for model {row['model']} but did not respond within {PROVIDER_TIMEOUT}s. The model is likely unavailable or overloaded — choose another model or a local Ollama model.") from None
     except (URLError, OSError, http.client.HTTPException):
-        raise ValueError("Could not reach the provider in time. Check the connection and retry.") from None
+        raise ValueError(f"Could not reach the provider at {row['endpoint']}. Check the connection and retry.") from None
     except (KeyError, TypeError, json.JSONDecodeError):
         raise ValueError("Provider returned an unsupported response format.") from None
 
