@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import ssl
 from threading import Event, Thread
+from unittest.mock import patch
+import pandas as pd
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -18,6 +20,8 @@ from nifty100_weekly.nifty100_adapter.web_app import create_server
 if __name__ == "__main__":
     root = Path(os.environ["SI_TRADER_LLM_HOME"])
     root.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame([{"symbol": "TEST", "close": 100., "daily_turnover_crore": 100.}])
+    patch("nifty100_weekly.nifty100_adapter.web_workspace.load_nifty100", return_value=(frame, {"source": "Browser test fixture", "asOf": "2026-11-25"})).start()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
     cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())

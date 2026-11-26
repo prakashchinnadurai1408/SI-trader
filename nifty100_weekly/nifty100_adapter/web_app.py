@@ -26,6 +26,7 @@ ASSETS = Path(__file__).with_name("web")
 FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/workspace.js": ("workspace.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
 }
 
@@ -94,6 +95,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if not self.authenticated():
                 self.send_json(401, {"error": "Sign in to continue."})
+                return
+            if self.path == "/api/workspace":
+                self.send_json(200, self.server.workspace.dispatch(payload))
                 return
             if self.path == "/api/auth/logout":
                 self.server.sessions.logout(self.headers.get("Cookie"))
@@ -175,6 +179,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if type(max_positions) is not int or not 1 <= max_positions <= 10:
                     raise ValueError("Choose 1 to 10 positions.")
                 trading = payload.get("execution")
+                if self.server.workspace.halted:
+                    raise ValueError("Paper execution is halted in Strategy workspace.")
                 if not isinstance(trading, dict):
                     raise ValueError("Save execution settings before running.")
                 funding = trading.get("funding")
@@ -207,7 +213,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     {"available_cash_inr": budget, "cash_buffer_pct": round(effective_buffer, 2), "paper": True},
                     research_context=context,
                 ) if affordable else {"basket": [], "title": "", "thesis": ""}
-                execution = paper_sizing(plan["basket"], budget, effective_buffer, scenario_move, execute)
+                with self.server.workspace.lock:
+                    if self.server.workspace.halted:
+                        raise ValueError("Paper execution was halted while research was running.")
+                    execution = paper_sizing(plan["basket"], budget, effective_buffer, scenario_move, execute)
                 if candidates and not affordable:
                     message = "No shortlisted stock can be sized within the current paper cash or exposure limit."
                 elif not candidates:
@@ -252,6 +261,8 @@ def create_server(host="127.0.0.1", port=8765, runtime=None):
     server = DashboardServer((host, port), DashboardHandler)
     server.runtime = runtime
     server.sessions = Sessions()
+    from .web_workspace import WebWorkspace
+    server.workspace = WebWorkspace()
     return server
 
 
