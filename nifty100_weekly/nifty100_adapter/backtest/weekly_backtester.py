@@ -365,7 +365,8 @@ class WeeklyBacktester:
             return {
                 "selection": [],
                 "message": "No stocks passed all filters and vetoes.",
-                "total_considered": len(self.universe)
+                "total_considered": len(self.universe),
+                "parameter_weight_total": sum(p.weight for p in self.score_calc.enabled_params),
             }
 
         # Step 5: Calculate scores for remaining stocks
