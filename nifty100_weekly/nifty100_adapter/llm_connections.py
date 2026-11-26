@@ -199,6 +199,10 @@ def chat(identifier, payload):
             body["chat_template_kwargs"] = {"clear_thinking": True}
             # This model counts reasoning and final text against the same budget.
             body["max_tokens"] = max(4096, body["max_tokens"])
+            if isinstance(format_spec, dict):
+                body["response_format"] = {"type": "json_schema", "json_schema": {
+                    "name": "research_result", "strict": True, "schema": format_spec,
+                }}
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
     timeout = provider_timeout()
