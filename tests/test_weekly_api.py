@@ -13,6 +13,7 @@ import pandas as pd
 from nifty100_weekly.nifty100_adapter.ai_parameters import PARAMETERS, LIVE_COLUMNS
 from nifty100_weekly.nifty100_adapter.deployment import Runtime
 from nifty100_weekly.nifty100_adapter.web_app import create_server
+from nifty100_weekly.nifty100_adapter.llm_connections import ProviderTimeout, ProviderUnavailable
 
 
 class WeeklyAPI(unittest.TestCase):
@@ -70,6 +71,20 @@ class WeeklyAPI(unittest.TestCase):
         self.assertEqual(status, 200, result)
         self.assertEqual(result["basket"], [])
         self.assertFalse(self.planner.called)
+
+    def test_provider_failure_returns_upstream_status_and_retry_can_succeed(self):
+        for error in (ProviderTimeout("Provider timed out; check LLM Configuration."),
+                      ProviderUnavailable("Provider unavailable; check LLM Configuration.")):
+            with self.subTest(status=error.status):
+                self.planner.side_effect = error
+                with patch("nifty100_weekly.nifty100_adapter.web_app.paper_sizing") as sizing:
+                    status, result = self.request()
+                self.assertEqual(status, error.status)
+                self.assertEqual(result["code"], error.code)
+                sizing.assert_not_called()
+                self.assertNotIn("basket", result)
+                self.planner.side_effect = None
+                self.assertEqual(self.request()[0], 200)
 
     def test_unexpected_internal_error_returns_json_and_server_stays_healthy(self):
         with patch("nifty100_weekly.nifty100_adapter.web_app.readiness", side_effect=KeyError("private-internal-fixture")):

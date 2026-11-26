@@ -26,6 +26,27 @@ PROVIDERS = {
     "custom": ("Custom OpenAI-compatible", "", "openai"),
 }
 
+
+class ProviderUnavailable(ValueError):
+    """A configured upstream service failed, rather than invalid user input."""
+    status = 502
+    code = "provider_unavailable"
+
+
+class ProviderTimeout(ProviderUnavailable):
+    status = 504
+    code = "provider_timeout"
+
+
+def provider_timeout():
+    try:
+        seconds = int(os.environ.get("SI_TRADER_LLM_TIMEOUT_SECONDS", "180"))
+    except ValueError:
+        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 300.") from None
+    if not 30 <= seconds <= 300:
+        raise ValueError("SI_TRADER_LLM_TIMEOUT_SECONDS must be an integer from 30 to 300.")
+    return seconds
+
 class Blob(ctypes.Structure):
     _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
 
@@ -174,11 +195,14 @@ def chat(identifier, payload):
             body["max_completion_tokens"] = body.pop("max_tokens")
         if row["provider"] == "nvidia" and row["model"].startswith("z-ai/glm-5.3"):
             body["reasoning_effort"] = "low"
-            body["max_tokens"] = max(1024, body["max_tokens"])
+            body["chat_template_kwargs"] = {"clear_thinking": True}
+            # This model counts reasoning and final text against the same budget.
+            body["max_tokens"] = max(4096, body["max_tokens"])
         suffix = "/chat/completions"
     request = Request(validate_endpoint(row["endpoint"]) + suffix, json.dumps(body).encode(), headers)
+    timeout = provider_timeout()
     try:
-        with build_opener(NoRedirect()).open(request, timeout=60) as response:
+        with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             raw = response.read(2_000_001)
         if len(raw) > 2_000_000:
             raise ValueError("Provider response exceeded the supported size.")
@@ -188,14 +212,24 @@ def chat(identifier, payload):
         else:
             content = data["choices"][0]["message"]["content"]
         if not isinstance(content, str) or not content.strip():
+            if suffix != "/messages" and data["choices"][0].get("finish_reason") == "length":
+                raise ValueError("The model exhausted its output budget before returning an answer. Choose a model with a smaller reasoning budget or retry in LLM Configuration.")
             raise ValueError("The selected model returned no text.")
         return {"message": {"content": content}}
     except HTTPError as error:
+        if error.code in (408, 504):
+            raise ProviderTimeout("The AI provider timed out. No new basket or paper fills were created. Retry once, or test/select another model in LLM Configuration.") from None
+        if error.code in (429, 500, 502, 503):
+            raise ProviderUnavailable(f"The AI provider is busy or unavailable (HTTP {error.code}). Retry later or select another model in LLM Configuration.") from None
         if error.code == 404:
             raise ValueError("Provider could not find this model or API route (HTTP 404). Edit the connection, load available models, and check the API base URL.") from None
         raise ValueError(f"Provider returned HTTP {error.code}. Check the key, model access, quota and API endpoint.") from None
-    except (URLError, OSError, http.client.HTTPException):
-        raise ValueError("Could not reach the provider in time. Check the connection and retry.") from None
+    except (TimeoutError, URLError) as error:
+        if isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+            raise ProviderTimeout(f"The AI provider did not answer within {timeout} seconds. No new basket or paper fills were created. Retry once, or test/select another model in LLM Configuration.") from None
+        raise ProviderUnavailable("Could not connect to the AI provider. Check the network and API endpoint, or select another model in LLM Configuration.") from None
+    except (OSError, http.client.HTTPException):
+        raise ProviderUnavailable("The AI provider connection was interrupted. Retry once, or test/select another model in LLM Configuration.") from None
     except (KeyError, TypeError, json.JSONDecodeError):
         raise ValueError("Provider returned an unsupported response format.") from None
 
