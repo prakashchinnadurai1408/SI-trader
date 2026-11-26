@@ -264,7 +264,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 class DashboardServer(ThreadingHTTPServer):
     def get_request(self):
         connection, address = super().get_request()
-        connection.settimeout(30)
+        connection.settimeout(90)
         return connection, address
 
 

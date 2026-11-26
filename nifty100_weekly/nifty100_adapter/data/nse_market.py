@@ -85,9 +85,12 @@ def load_nifty100(today=None):
             for offset in range(0, len(days), 6):
                 batch = days[offset:offset + 6]
                 reports = executor.map(lambda day: equity_session(day, instruments), batch)
-                sessions.extend((day, data) for day, data in zip(batch, reports) if data is not None)
+                new_sessions = [(day, data) for day, data in zip(batch, reports) if data is not None]
+                sessions.extend(new_sessions)
                 if len(sessions) >= 6:
                     break
+                if not new_sessions:
+                    break  # No network data available; stop trying older sessions
     except OSError:
         raise ValueError("Could not retrieve NSE market data. Try again shortly.") from None
 
