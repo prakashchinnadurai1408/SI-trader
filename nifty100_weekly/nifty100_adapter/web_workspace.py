@@ -153,6 +153,7 @@ class WebWorkspace:
             max_loss_per_trade=risk, max_positions=5, cost_pct=get_cost_model().roundtrip_cost_pct)
         evaluation, holdout = None, None
         issues = []
+        issues.append("The stock subset and candidate proposals are formed now. Historical results on that retrospective selection can have selection/survivorship bias; they are not prospective holdout proof.")
         path = os.environ.get("SI_TRADER_STRATEGY_BUNDLE")
         if path:
             from .backtest.monthly_inputs import load_inputs
