@@ -63,12 +63,31 @@ def test_model(model):
     return {"model": model, "elapsedMs": round((perf_counter() - started) * 1000)}
 
 
+class PlanValidationError(ValueError):
+    pass
+
+
 def generate_plan(model, objective, candidates, max_positions, active_scores=None, funding_context=None, research_context=None):
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["title", "thesis", "basket"],
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "thesis": {"type": "string", "minLength": 1},
+            "basket": {"type": "array", "maxItems": max_positions, "items": {
+                "type": "object", "additionalProperties": False, "required": ["symbol", "weight", "reason"],
+                "properties": {
+                    "symbol": {"type": "string", "enum": [item["symbol"] for item in candidates]},
+                    "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+                    "reason": {"type": "string", "minLength": 1},
+                },
+            }},
+        },
+    }
     payload = ollama("/api/chat", {
         "model": model,
         "stream": False,
         "think": False,
-        "format": "json",
+        "format": schema,
         "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 900},
         "messages": [
             {"role": "system", "content": (
@@ -98,7 +117,7 @@ def generate_plan(model, objective, candidates, max_positions, active_scores=Non
         thesis = plan["thesis"].strip()
         suggestions = plan["basket"]
         if not title or not thesis or not isinstance(suggestions, list) or len(suggestions) > max_positions:
-            raise ValueError()
+            raise PlanValidationError("The model returned missing text or too many basket entries. Retry or select another model.")
         by_symbol = {item["symbol"]: item for item in candidates}
         basket = []
         seen = set()
@@ -110,14 +129,16 @@ def generate_plan(model, objective, candidates, max_positions, active_scores=Non
                 symbol not in by_symbol or symbol in seen or type(weight) not in (int, float)
                 or not math.isfinite(weight) or not 0 < weight <= 20 or not reason
             ):
-                raise ValueError()
+                raise PlanValidationError("The model returned an unknown/duplicate stock, invalid weight, or missing rationale. No new basket was accepted.")
             weight = round(weight, 2)
             if weight <= 0:
-                raise ValueError()
+                raise PlanValidationError("The model returned a weight too small to allocate. No new basket was accepted.")
             seen.add(symbol)
             basket.append({**by_symbol[symbol], "weight": weight, "reason": reason[:600]})
         if sum(item["weight"] for item in basket) > 90.00000001:
-            raise ValueError()
+            raise PlanValidationError("The model allocated more than the 90% paper exposure limit. No new basket was accepted.")
+    except PlanValidationError:
+        raise
     except (ValueError, TypeError, KeyError, AttributeError):
         raise ValueError("The model output failed the paper basket checks. Try again or select another model.") from None
     return {"title": title[:100], "thesis": thesis[:1200], "basket": basket}

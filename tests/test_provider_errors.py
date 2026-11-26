@@ -64,3 +64,10 @@ class ProviderErrors(unittest.TestCase):
             "choices": [{"message": {"content": None}, "finish_reason": "length"}]}).encode()
         with self.assertRaisesRegex(ValueError, "output budget"):
             llm.chat("fixture", self.payload)
+
+    def test_glm_uses_native_schema_when_requested(self):
+        schema = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"], "additionalProperties": False}
+        llm.chat("fixture", {**self.payload, "format": schema})
+        body = json.loads(self.opener.open.call_args.args[0].data)
+        self.assertEqual(body["response_format"]["type"], "json_schema")
+        self.assertEqual(body["response_format"]["json_schema"]["schema"], schema)
