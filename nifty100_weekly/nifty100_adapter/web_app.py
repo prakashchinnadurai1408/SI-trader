@@ -13,7 +13,7 @@ from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, 
 from .ai_strategy import generate_plan, installed_models, test_model
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
-from .full_catalogue import full_catalogue, readiness, run_report
+from .full_catalogue import full_catalogue, readiness, run_report, score_individual_stock
 from .investright import broker_get, holdings_count
 from .research_committee import build_committee, held_symbols
 from .research_watchlist import build_watchlist
@@ -143,6 +143,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._&-]{0,29}", symbol):
                         raise ValueError("Choose a valid NSE symbol.")
                     self.send_json(200, run_diagnostics(symbol, payload.get("horizon")))
+                    return
+                if self.path == "/api/individual-stock-score":
+                    symbol = payload.get("symbol")
+                    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._&-]{0,29}", symbol):
+                        raise ValueError("Choose a valid NSE symbol.")
+                    frame, market = load_nifty100()
+                    evidence, records = readiness(frame, market)
+                    self.send_json(200, score_individual_stock(symbol, records, evidence))
                     return
                 model = payload.get("model")
                 if self.path == "/api/model-test":
