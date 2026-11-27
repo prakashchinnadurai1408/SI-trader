@@ -71,6 +71,7 @@ class QuantTests(unittest.TestCase):
         self.assertEqual(stress["terminalReturnsPct"],sorted(stress["terminalReturnsPct"]))
         self.assertGreaterEqual(stress["expectedShortfall95LossPct"],stress["var95LossPct"])
         self.assertFalse(result["tradeEligible"])
+        self.assertNotIn("untrustedExtra",scenario({**inputs,"untrustedExtra":"not forwarded to agents"})["inputs"])
         for bad in ({"volatilityPct":0},{"spot":float("nan")},{"sessions":1000000},{"ratePct":10000},{"option":"invalid"}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 scenario({**inputs,**bad})

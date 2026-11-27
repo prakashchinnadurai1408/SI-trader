@@ -45,5 +45,6 @@ def scenario(payload):
                 "percentiles": [5,25,50,75,95], "terminalReturnsPct": quantiles.tolist(),
                 "var95LossPct": max(0., -float(quantiles[0])), "expectedShortfall95LossPct": max(0., -float(tail.mean())),
                 "assumption": "GBM, constant supplied volatility, zero arithmetic price drift; no costs, gaps, volatility clustering or calibration"},
-            "inputs": payload, "tradeEligible": False,
+            "inputs": {"spot":spot,"strike":strike,"volatilityPct":vol*100,"ratePct":rate*100,
+                       "dividendPct":dividend*100,"calendarDays":days,"sessions":horizon,"option":payload.get("option","call")}, "tradeEligible": False,
             "note": "Supplied assumptions, not observed option IV or calibrated return forecasts. Greeks use European Black–Scholes with continuous dividend yield."}
