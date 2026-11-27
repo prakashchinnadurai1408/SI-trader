@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import ssl
 from threading import Event, Thread
+from unittest.mock import patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -14,8 +15,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from nifty100_weekly.nifty100_adapter.deployment import Runtime, password_hash
 from nifty100_weekly.nifty100_adapter.web_app import create_server
+from nifty100_weekly.nifty100_adapter.llm_connections import ProviderTimeout
 
 if __name__ == "__main__":
+    patch("nifty100_weekly.nifty100_adapter.web_app.installed_models", return_value=["fixture"]).start()
+    patch("nifty100_weekly.nifty100_adapter.web_app.test_model", side_effect=[ProviderTimeout("Fixture provider timeout. Choose another model."), {"model":"fixture","elapsedMs":10}]).start()
     root = Path(os.environ["SI_TRADER_LLM_HOME"])
     root.mkdir(parents=True, exist_ok=True)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

@@ -48,7 +48,7 @@ class HostedAPI(unittest.TestCase):
         return headers["Set-Cookie"].split(";", 1)[0]
 
     def test_api_requires_auth_even_when_ui_is_bypassed(self):
-        for path in ("/api/llm-save", "/api/broker", "/api/monthly-comparison", "/api/strategy"):
+        for path in ("/api/llm-save", "/api/broker", "/api/monthly-comparison", "/api/strategy", "/api/research-jobs", "/api/research-jobs/status"):
             with self.subTest(path=path):
                 self.assertEqual(self.request(path, {})[0], 401)
 
@@ -105,7 +105,7 @@ class HostingConfiguration(unittest.TestCase):
             client.return_value.getresponse.return_value.status = 200
             client.return_value.getresponse.return_value.read.return_value = b'{"models":[]}'
             self.assertEqual(ollama("/api/tags"), {"models": []})
-            client.assert_called_once_with("ollama.example", 1443, timeout=180)
+            client.assert_called_once_with("ollama.example", 1443, timeout=10)
 
     def test_local_network_boundary(self):
         with patch.dict(os.environ, {"SI_TRADER_MODE": "local"}):

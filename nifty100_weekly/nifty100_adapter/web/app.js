@@ -902,7 +902,32 @@ function show(message = "", error = false) {
   render();
 }
 
+const backgroundResearch = new Set(["/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test"]);
 async function request(path, body) {
+  if (!backgroundResearch.has(path)) return directRequest(path, body);
+  let job = await directRequest("/api/research-jobs", {route: path, body,
+    requestId: crypto.randomUUID().replaceAll("-", "")});
+  while (job.state === "queued" || job.state === "running") {
+    if (state.busy && !state.halted) {
+      const details = job.details || {};
+      const coverage = details.parametersEvaluated == null ? "" :
+        ` · ${details.parametersEvaluated}/${details.parametersTotal} parameters checked; ${details.parametersCovered}/${details.parametersTotal} fully covered`;
+      state.message = `${job.stage} · ${job.elapsedSeconds}s elapsed${coverage}`;
+      state.error = false;
+      render();
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    job = await directRequest("/api/research-jobs/status", {id: job.id});
+  }
+  if (job.state !== "succeeded") {
+    const result = job.result || {};
+    throw new Error((result.error || "Research stopped. Retry or check LLM Configuration.") +
+      (result.requestId ? " Reference: " + result.requestId : ""));
+  }
+  return job.result;
+}
+
+async function directRequest(path, body) {
   const response = await fetch(path, {
     method: "POST",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
@@ -914,7 +939,7 @@ async function request(path, body) {
     state.snapshot = null;
     render();
   }
-  if (!response.ok) throw new Error(result.error || "The local request failed.");
+  if (!response.ok) throw new Error((result.error || "The request failed.") + (result.requestId ? " Reference: " + result.requestId : ""));
   return result;
 }
 

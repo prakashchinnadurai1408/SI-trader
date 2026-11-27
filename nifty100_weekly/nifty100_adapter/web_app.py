@@ -1,5 +1,9 @@
 """Serve the SI-Trader paper dashboard on the local machine."""
 
+import logging
+import socket
+from hashlib import sha256
+from uuid import uuid4
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -8,15 +12,16 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 from .deployment import Runtime, Sessions
+from .research_jobs import ResearchJobs, JobBusy
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
-from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models
+from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models, ProviderUnavailable
 from .ai_strategy import generate_plan, installed_models, test_model
 from .data.catalogue_evidence import collect_evidence
 from .data.nse_market import load_nifty100
 from .full_catalogue import full_catalogue, readiness, run_report, score_individual_stock
 from .investright import broker_get, holdings_count
-from .research_committee import build_committee, held_symbols
+from .research_committee import build_committee, held_symbols, validate_committee_models
 from .research_watchlist import build_watchlist
 from .strategy_lab import pulse, run_comparison, run_diagnostics, run_replay
 from .strategy_builder import build_research_strategy
@@ -286,6 +291,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.server.sessions.logout(self.headers.get("Cookie"))
                 self.send_json(200, {"authenticated": False}, {"Set-Cookie": self.server.sessions.cookie("", clear=True)})
                 return
+            owner = sha256((self.server.sessions.token(self.headers.get("Cookie")) if self.server.runtime.hosted else "local").encode()).hexdigest()
+            if self.path == "/api/research-jobs":
+                route, body = payload.get("route"), payload.get("body")
+                server = self.server
+                result = server.research_jobs.start(owner, route, body, payload.get("requestId"), lambda: execute_research(server, route, body))
+                self.send_json(202, result)
+                return
+            if self.path == "/api/research-jobs/status":
+                self.send_json(200, self.server.research_jobs.status(owner, payload.get("id")))
+                return
+            self._dispatch(payload)
+        except JobBusy as error:
+            self.send_json(429, {"error": str(error)})
+        except ProviderUnavailable as error:
+            self.send_json(error.status, {"error": str(error), "code": error.code})
+        except (ValueError, OSError) as error:
+            self.send_json(400, {"error": str(error)})
+        except Exception:
+            reference = uuid4().hex[:12]
+            logging.getLogger(__name__).exception("API request %s failed at %s", reference, self.path)
+            self.send_json(500, {"error": "The server could not complete this request. Check its log using the reference.", "requestId": reference})
+
+    def _dispatch(self, payload):
+        try:
             if self.path == "/api/holdings":
                 self.send_json(200, {"count": holdings_count()})
             elif self.path == "/api/broker":
@@ -365,15 +394,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 max_positions = payload.get("maxPositions")
                 if not isinstance(objective, str) or not 1 <= len(objective.strip()) <= 500:
                     raise ValueError("Enter a strategy objective of up to 500 characters.")
-                if not isinstance(model, str) or model not in installed_models():
-                    raise ValueError("Choose an available model in LLM Configuration.")
                 if self.path == "/api/research-committee":
                     holdings = held_symbols(payload.get("holdings", []))
                     models = payload.get("models", payload.get("model"))
-                    if models is None:
-                        raise ValueError("Provide 'models' (string or {maker,checker,umpire}) or 'model'.")
+                    models = validate_committee_models(models, installed_models())
                     self.send_json(200, build_committee(models, objective.strip(), holdings))
                     return
+                if not isinstance(model, str) or model not in installed_models():
+                    raise ValueError("Choose an available model in LLM Configuration.")
                 if self.path == "/api/full-catalogue":
                     self.send_json(200, full_catalogue(model, objective.strip()))
                     return
@@ -448,10 +476,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self.send_error(404)
+        except JobBusy as error:
+            self.send_json(429, {"error": str(error)})
+        except ProviderUnavailable as error:
+            self.send_json(error.status, {"error": str(error), "code": error.code})
         except (ValueError, OSError) as error:
             self.send_json(400, {"error": str(error)})
-        except Exception as error:  # defensive: never leave the connection empty
-            self.send_json(500, {"error": "Internal server error."})
+        except Exception:
+            reference = uuid4().hex[:12]
+            logging.getLogger(__name__).exception("API request %s failed at %s", reference, self.path)
+            self.send_json(500, {"error": "The server could not complete this request. Check its log using the reference.", "requestId": reference})
 
     def _handle_options_subpath(self, payload):
         subpath = self.path[len("/api/options/"):]
@@ -681,7 +715,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
+def execute_research(server, route, body):
+    # Reuse validated dispatch without keeping a browser socket or credentials in the worker.
+    handler = object.__new__(DashboardHandler)
+    handler.server, handler.path = server, route
+    captured = []
+    handler.send_json = lambda status, result, headers=None: captured.append((status, result))
+    handler.send_error = lambda status: captured.append((status, {"error": "Unknown research operation."}))
+    handler._dispatch(body)
+    return captured[0] if captured else (500, {"error": "Research did not return a result."})
+
+
 class DashboardServer(ThreadingHTTPServer):
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(90)
@@ -695,6 +747,7 @@ def create_server(host="127.0.0.1", port=8765, runtime=None):
     server = DashboardServer((host, port), DashboardHandler)
     server.runtime = runtime
     server.sessions = Sessions()
+    server.research_jobs = ResearchJobs()
     server.broker_adapter = None
     server.price_registry = PriceRegistry()
     server.webhook_store = WebhookStore()

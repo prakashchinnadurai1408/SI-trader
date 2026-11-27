@@ -1,3 +1,4 @@
+from .research_jobs import progress
 """Maker, Checker and Umpire research review for current Nifty 100 data."""
 
 import re
@@ -141,6 +142,23 @@ def _resolve_models(models, role):
     raise ValueError("models must be a string or a dict with maker/checker/umpire keys.")
 
 
+def validate_committee_models(models, available):
+    available = set(available)
+    def checked(value, role):
+        chain = value if isinstance(value, list) else [value]
+        if not 1 <= len(chain) <= 3 or any(not isinstance(item, str) or not item for item in chain):
+            raise ValueError(f"Choose one to three models for {role}.")
+        normalized = ["profile:"+item if "profile:"+item in available else item for item in chain]
+        if any(item not in available for item in normalized):
+            raise ValueError(f"Choose an available model for {role} in LLM Configuration.")
+        return normalized if isinstance(value, list) else normalized[0]
+    if isinstance(models, str):
+        return checked(models, "the committee")
+    if not isinstance(models, dict) or any(key not in ("maker", "checker", "umpire", "default") for key in models):
+        raise ValueError("Provide model, or models with maker/checker/umpire settings.")
+    return {role: checked(_resolve_models(models, role), role) for role in ("maker", "checker", "umpire")}
+
+
 def review_agents(frame, evidence, records, models, objective, holdings):
     holdings = held_symbols(holdings)
     universe, details, risk, catalogue = shortlist_context(frame, evidence, records, holdings)
@@ -153,6 +171,7 @@ def review_agents(frame, evidence, records, models, objective, holdings):
     if not universe and not details:
         return {**empty_review(evidence), "outsideUniverseHoldings": holdings}
 
+    progress("Maker agent research", agentRole="Maker")
     maker_model = _resolve_models(models, "maker")
     maker = agent(maker_model, (
         "You are Maker. Propose up to six research candidates from candidate_symbols, or an empty list. "
@@ -165,6 +184,7 @@ def review_agents(frame, evidence, records, models, objective, holdings):
     known_holdings = [symbol for symbol in holdings if symbol in details]
     # Checker gets all proposed names and all observed holdings, including failed risk screens.
     checker_scope = list(dict.fromkeys([*proposed, *known_holdings]))
+    progress("Checker agent research", agentRole="Checker")
     checker_model = _resolve_models(models, "checker")
     checker = agent(checker_model, (
         "You are Checker. Identify credible downside scenarios and say which Maker candidates to avoid in "
@@ -188,6 +208,7 @@ def review_agents(frame, evidence, records, models, objective, holdings):
 
     allowed = [symbol for symbol in proposed if symbol not in avoided and not reject]
     reviewable = list(dict.fromkeys([*exit_review, *(symbol for symbol in known_holdings if risk[symbol]["failed"])]))
+    progress("Umpire agent research", agentRole="Umpire")
     umpire_model = _resolve_models(models, "umpire")
     umpire = agent(umpire_model, (
         "You are Umpire. Reconcile Maker and Checker. Rank research priorities only from surviving_candidates. "

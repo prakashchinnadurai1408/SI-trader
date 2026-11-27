@@ -32,3 +32,10 @@ By default the service binds to loopback and uses a demo sign-in. Keep that mode
 - [Six-rebalance paper pilot and screenshot review](nifty100_weekly/PAPER_PILOT.md)
 - [Agent tools and filing review workflow](nifty100_weekly/AGENT_TOOLS.md)
 - [CI, hosted authentication, Docker and Stormkit deployment](deploy/README.md)
+
+
+## Development model request recovery
+
+This broker/webhook development branch uses a 600-second inference timeout by default. Set `SI_TRADER_LLM_TIMEOUT_SECONDS` from 30 to 1800 to override it. Model tests, committee research, full-catalogue research and monthly proposals use bounded background jobs and short authenticated status polling; broker/order/webhook operations are never queued by this mechanism. Provider timeouts are HTTP 504, and upstream connection failures are HTTP 502, rather than invalid-input HTTP 400.
+
+Committee requests accept the legacy `model` field or `models` with `maker`, `checker`, `umpire` (or `default`). Each role can use a saved `profile:<id>`/installed local model, or an explicit fallback list of up to three models. All selected models are validated before inference. Fallbacks may mix saved cloud profiles and local Ollama models. No additional model is selected automatically when no fallback list was configured.
