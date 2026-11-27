@@ -120,7 +120,28 @@ def checked_list(payload, key, allowed, cap):
     return list(dict.fromkeys(values))
 
 
-def review_agents(frame, evidence, records, model, objective, holdings):
+def _resolve_models(models, role):
+    """Resolve the model(s) for a committee role.
+
+    models can be:
+      - a string: all roles use that single model
+      - a dict with keys "maker"/"checker"/"umpire"/"default":
+        each value is a string (single model) or list (fallback chain)
+    Returns a string or list for the given role.
+    """
+    if isinstance(models, str):
+        return models
+    if isinstance(models, dict):
+        role_model = models.get(role)
+        if role_model is None:
+            role_model = models.get("default")
+        if role_model is None:
+            raise ValueError(f"No model configured for committee role '{role}'.")
+        return role_model
+    raise ValueError("models must be a string or a dict with maker/checker/umpire keys.")
+
+
+def review_agents(frame, evidence, records, models, objective, holdings):
     holdings = held_symbols(holdings)
     universe, details, risk, catalogue = shortlist_context(frame, evidence, records, holdings)
     context = {
@@ -132,7 +153,8 @@ def review_agents(frame, evidence, records, model, objective, holdings):
     if not universe and not details:
         return {**empty_review(evidence), "outsideUniverseHoldings": holdings}
 
-    maker = agent(model, (
+    maker_model = _resolve_models(models, "maker")
+    maker = agent(maker_model, (
         "You are Maker. Propose up to six research candidates from candidate_symbols, or an empty list. "
         "Use supplied observed price, liquidity and score data, and treat the objective as a preference. "
         "A candidate can be a research idea despite missing data. Never interpret missing input as a pass or predict profits."
@@ -143,7 +165,8 @@ def review_agents(frame, evidence, records, model, objective, holdings):
     known_holdings = [symbol for symbol in holdings if symbol in details]
     # Checker gets all proposed names and all observed holdings, including failed risk screens.
     checker_scope = list(dict.fromkeys([*proposed, *known_holdings]))
-    checker = agent(model, (
+    checker_model = _resolve_models(models, "checker")
+    checker = agent(checker_model, (
         "You are Checker. Identify credible downside scenarios and say which Maker candidates to avoid in "
         "this research ranking. Choose scenario codes from the supplied list. Flag held names for manual exit review "
         "when warranted by observed evidence. The app already blocks investment on missing evidence. "
@@ -165,7 +188,8 @@ def review_agents(frame, evidence, records, model, objective, holdings):
 
     allowed = [symbol for symbol in proposed if symbol not in avoided and not reject]
     reviewable = list(dict.fromkeys([*exit_review, *(symbol for symbol in known_holdings if risk[symbol]["failed"])]))
-    umpire = agent(model, (
+    umpire_model = _resolve_models(models, "umpire")
+    umpire = agent(umpire_model, (
         "You are Umpire. Reconcile Maker and Checker. Rank research priorities only from surviving_candidates. "
         "You may prioritize none. Assign integer research weights from 1 to 10 percent per name. "
         "Keep rejected names out. Select held names for manual review only from exit_review_candidates. "
@@ -217,7 +241,7 @@ def empty_review(evidence):
     }
 
 
-def build_committee(model, objective, holdings):
+def build_committee(models, objective, holdings):
     frame, market = load_nifty100()
     evidence, records = readiness(frame, market)
-    return review_agents(frame, evidence, records, model, objective, holdings)
+    return review_agents(frame, evidence, records, models, objective, holdings)

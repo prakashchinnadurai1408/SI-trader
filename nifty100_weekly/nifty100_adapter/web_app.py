@@ -369,7 +369,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ValueError("Choose an available model in LLM Configuration.")
                 if self.path == "/api/research-committee":
                     holdings = held_symbols(payload.get("holdings", []))
-                    self.send_json(200, build_committee(model, objective.strip(), holdings))
+                    models = payload.get("models", payload.get("model"))
+                    if models is None:
+                        raise ValueError("Provide 'models' (string or {maker,checker,umpire}) or 'model'.")
+                    self.send_json(200, build_committee(models, objective.strip(), holdings))
                     return
                 if self.path == "/api/full-catalogue":
                     self.send_json(200, full_catalogue(model, objective.strip()))

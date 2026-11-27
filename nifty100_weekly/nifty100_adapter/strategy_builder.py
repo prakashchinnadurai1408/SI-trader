@@ -6,6 +6,7 @@ from statistics import median
 
 from .ai_strategy import ollama
 from .backtest.monthly_backtester import WEIGHTS
+from .llm_connections import chat_with_fallback
 
 OBJECTS = {"type": "object", "additionalProperties": False}
 DIMENSIONS = {
@@ -33,15 +34,23 @@ TILTS = {
 }
 
 
-def agent(model, instructions, evidence, schema):
-    response = ollama("/api/chat", {
-        "model": model, "stream": False, "think": False, "format": schema,
+def agent(models, instructions, evidence, schema):
+    payload = {
+        "stream": False, "think": False, "format": schema,
         "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 450},
         "messages": [
             {"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(evidence, allow_nan=False)},
         ],
-    })
+    }
+    if isinstance(models, list):
+        response = chat_with_fallback(models, payload)
+    else:
+        response = ollama("/api/chat", {
+            "model": models, "stream": False, "think": False, "format": schema,
+            "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 450},
+            "messages": payload["messages"],
+        })
     try:
         result = json.loads(response["message"]["content"])
         if not isinstance(result, dict):

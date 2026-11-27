@@ -215,6 +215,32 @@ def chat(identifier, payload):
         raise ValueError("Provider returned an unsupported response format.") from None
 
 
+def chat_with_fallback(models, payload):
+    """Try a list of model identifiers in order; return on first success.
+
+    models: list of profile identifiers (strings). If a single string is
+    passed, it is treated as a one-element list.
+    payload: same dict passed to chat() (messages, format, options).
+
+    Returns the chat result dict from the first model that succeeds.
+    Raises ValueError listing all failures if every model fails.
+    """
+    if isinstance(models, str):
+        models = [models]
+    if not isinstance(models, list) or not models:
+        raise ValueError("chat_with_fallback requires a non-empty list of model identifiers.")
+
+    errors = []
+    for identifier in models:
+        try:
+            return chat(identifier, payload)
+        except ValueError as exc:
+            errors.append(f"{identifier}: {exc}")
+            continue
+    detail = "; ".join(errors)
+    raise ValueError(f"All fallback models failed: {detail}")
+
+
 def provider_models(payload):
     provider = payload.get("provider")
     if not isinstance(provider, str) or provider not in PROVIDERS:
