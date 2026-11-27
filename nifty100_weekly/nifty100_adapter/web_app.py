@@ -30,7 +30,7 @@ from .broker import (
 from .options import black_scholes, build_option_chain, payoff, implied_volatility
 from .realtime import PriceRegistry, intraday_scan
 from .tax import capital_gains_for_trades, Trade
-from .webhooks import WebhookStore, fire_webhooks
+from .webhooks import WebhookStore, fire_webhooks, deliver_webhook
 
 ASSETS = Path(__file__).with_name("web")
 FILES = {
@@ -653,18 +653,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if subpath == "unregister":
             webhook_id = payload.get("id")
             if not isinstance(webhook_id, str) or not webhook_id:
-                raise ValueError("Provide a webhook id.")
+                raise ValueError("Provide the webhook id returned by register or list.")
             ok = store.unregister(webhook_id)
             self.send_json(200, {"unregistered": ok})
             return
 
         if subpath == "test":
             webhook_id = payload.get("id")
+            if not isinstance(webhook_id, str) or not webhook_id:
+                raise ValueError("Provide the webhook id returned by register or list.")
             event = payload.get("event", "test.ping")
             test_payload = payload.get("payload", {"test": True})
+            if not isinstance(event, str) or not event.strip() or any(ord(char) < 32 for char in event):
+                raise ValueError("Provide a nonempty webhook event without control characters.")
+            if not isinstance(test_payload, dict):
+                raise ValueError("Webhook payload must be a JSON object.")
             wh = store.get(webhook_id) if webhook_id else None
             if wh is None:
-                raise ValueError("Webhook not found.")
+                raise ValueError("Webhook not found. Use a current id from register or list; registrations reset when the server restarts.")
             ok = deliver_webhook(wh.url, wh.secret, event, test_payload)
             self.send_json(200, {"delivered": ok, "event": event, "url": wh.url})
             return
