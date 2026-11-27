@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import re
+from datetime import date, datetime
 from pathlib import Path
 from .deployment import Runtime, Sessions
 
@@ -21,6 +22,15 @@ from .strategy_lab import pulse, run_comparison, run_diagnostics, run_replay
 from .strategy_builder import build_research_strategy
 from .weekly_research import weekly_candidates, weekly_context
 from .trading_workspace import ENDPOINTS, affordable_candidates, broker_snapshot, cash_amount, number, paper_sizing
+from .broker import (
+    BrokerConfig, BrokerPlatform, PaperBrokerAdapter,
+    KiteConnectAdapter, OpenAlgoAdapter, FenixAdapter,
+    OrderRequest, OrderSide, OrderType, ProductType,
+)
+from .options import black_scholes, build_option_chain, payoff, implied_volatility
+from .realtime import PriceRegistry, intraday_scan
+from .tax import capital_gains_for_trades, Trade
+from .webhooks import WebhookStore, fire_webhooks
 
 ASSETS = Path(__file__).with_name("web")
 FILES = {
@@ -61,6 +71,183 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("Provide a JSON object.")
         return payload
+
+    def _get_broker(self):
+        adapter = self.server.broker_adapter
+        if adapter is None or not adapter.is_connected():
+            raise ValueError("Broker not connected. POST /api/broker/connect first.")
+        return adapter
+
+    def _handle_broker_subpath(self, payload):
+        subpath = self.path[len("/api/broker/"):]
+        adapter = self.server.broker_adapter
+
+        if subpath == "connect":
+            platform = payload.get("platform", "paper")
+            if platform == "paper":
+                adapter = PaperBrokerAdapter(BrokerConfig(
+                    platform=BrokerPlatform.ZERODHA_KITE,
+                    client_id=payload.get("client_id", "PAPER"),
+                ), webhook_store=self.server.webhook_store)
+            else:
+                try:
+                    plat = BrokerPlatform(platform)
+                except ValueError:
+                    raise ValueError(f"Unknown broker platform: {platform}")
+                if plat == BrokerPlatform.ZERODHA_KITE:
+                    adapter = KiteConnectAdapter(BrokerConfig(
+                        platform=plat,
+                        client_id=payload.get("client_id", ""),
+                        api_key=payload.get("api_key", ""),
+                        secret_key=payload.get("secret_key", ""),
+                        access_token=payload.get("access_token", ""),
+                    ))
+                elif plat == BrokerPlatform.OPEN_ALGO:
+                    adapter = OpenAlgoAdapter(BrokerConfig(
+                        platform=plat,
+                        api_key=payload.get("api_key", ""),
+                        base_url=payload.get("base_url", "http://localhost:5000"),
+                    ))
+                elif plat == BrokerPlatform.FENIX:
+                    adapter = FenixAdapter(BrokerConfig(
+                        platform=plat,
+                        api_key=payload.get("api_key", ""),
+                        base_url=payload.get("base_url", "http://localhost:8000"),
+                    ))
+                else:
+                    adapter = PaperBrokerAdapter(BrokerConfig(
+                        platform=BrokerPlatform.ZERODHA_KITE,
+                        client_id=payload.get("client_id", "PAPER"),
+                    ))
+            if not adapter.connect():
+                raise ValueError(f"Broker connect failed: {platform}")
+            self.server.broker_adapter = adapter
+            self.send_json(200, {
+                "connected": True,
+                "platform": platform,
+                "account_id": adapter.account_id,
+            })
+            return
+
+        if subpath == "disconnect":
+            if adapter:
+                adapter.disconnect()
+            self.server.broker_adapter = None
+            self.send_json(200, {"connected": False})
+            return
+
+        broker = self._get_broker()
+
+        if subpath == "margins":
+            m = broker.get_margins()
+            self.send_json(200, {
+                "available_cash": m.available_cash if m else 0.0,
+                "used_margin": m.used_margin if m else 0.0,
+                "total_margin": m.total_margin if m else 0.0,
+                "timestamp": m.timestamp if m else None,
+            })
+            return
+
+        if subpath == "positions":
+            positions = broker.get_positions()
+            self.send_json(200, {
+                "positions": [
+                    {
+                        "symbol": p.symbol,
+                        "quantity": p.quantity,
+                        "average_price": p.average_price,
+                        "current_price": p.current_price,
+                        "pnl": p.pnl,
+                        "pnl_percent": p.pnl_percent,
+                        "product": p.product.value,
+                    }
+                    for p in positions
+                ]
+            })
+            return
+
+        if subpath == "orders":
+            orders = broker.get_orders()
+            self.send_json(200, {
+                "orders": [
+                    {
+                        "order_id": o.order_id,
+                        "algo_id": o.algo_id,
+                        "symbol": o.symbol,
+                        "action": o.action.value,
+                        "quantity": o.quantity,
+                        "price": o.price,
+                        "order_type": o.order_type.value,
+                        "product": o.product.value,
+                        "status": o.status.value,
+                        "filled_quantity": o.filled_quantity,
+                        "average_price": o.average_price,
+                        "timestamp": o.timestamp,
+                        "error_message": o.error_message,
+                    }
+                    for o in orders
+                ]
+            })
+            return
+
+        if subpath == "trades":
+            trades = broker.get_trades()
+            self.send_json(200, {
+                "trades": [
+                    {
+                        "trade_id": t.trade_id,
+                        "order_id": t.order_id,
+                        "symbol": t.symbol,
+                        "action": t.action.value,
+                        "quantity": t.quantity,
+                        "price": t.price,
+                        "timestamp": t.timestamp,
+                        "brokerage": t.brokerage,
+                    }
+                    for t in trades
+                ]
+            })
+            return
+
+        if subpath == "place-order":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            action = OrderSide(payload.get("action", "BUY").upper())
+            quantity = int(payload.get("quantity", 1))
+            price = payload.get("price")
+            order_type = OrderType(payload.get("order_type", "MARKET").upper())
+            product = ProductType(payload.get("product", "CNC").upper())
+            validity = payload.get("validity", "DAY")
+            stop_loss = payload.get("stop_loss")
+            target = payload.get("target")
+            tag = payload.get("tag")
+            strategy_id = payload.get("strategy_id")
+
+            order = OrderRequest(
+                symbol=symbol, action=action, quantity=quantity,
+                price=float(price) if price is not None else None,
+                order_type=order_type, product=product,
+                validity=validity, stop_loss=float(stop_loss) if stop_loss is not None else None,
+                target=float(target) if target is not None else None,
+                tag=tag, strategy_id=strategy_id,
+            )
+            resp = broker.place_order(order)
+            self.send_json(200, {
+                "order_id": resp.order_id,
+                "algo_id": resp.algo_id,
+                "status": resp.status.value,
+                "filled_quantity": resp.filled_quantity,
+                "average_price": resp.average_price,
+                "brokerage": resp.brokerage,
+                "exchange": resp.exchange,
+                "timestamp": resp.timestamp,
+                "error_message": resp.error_message,
+            })
+            return
+
+        self.send_error(404)
+
 
     def do_GET(self):
         if self.path == "/healthz" and (self.local_request() or self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"):
@@ -103,6 +290,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"count": holdings_count()})
             elif self.path == "/api/broker":
                 self.send_json(200, broker_snapshot())
+            elif self.path.startswith("/api/broker/"):
+                self._handle_broker_subpath(payload)
+                return
+            elif self.path.startswith("/api/options/"):
+                self._handle_options_subpath(payload)
+                return
+            elif self.path.startswith("/api/realtime/"):
+                self._handle_realtime_subpath(payload)
+                return
+            elif self.path.startswith("/api/tax/"):
+                self._handle_tax_subpath(payload)
+                return
+            elif self.path.startswith("/api/webhooks/"):
+                self._handle_webhooks_subpath(payload)
+                return
+                return
             elif self.path == "/api/catalogue-evidence":
                 frame, market = load_nifty100()
                 self.send_json(200, collect_evidence(frame, market))
@@ -247,6 +450,227 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception as error:  # defensive: never leave the connection empty
             self.send_json(500, {"error": "Internal server error."})
 
+    def _handle_options_subpath(self, payload):
+        subpath = self.path[len("/api/options/"):]
+
+        if subpath == "greeks":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            strike = float(payload.get("strike", 0))
+            rate = float(payload.get("rate", 0.06))
+            vol = float(payload.get("vol", 0.20))
+            tte_days = float(payload.get("tte_days", 30))
+            option_type = payload.get("option_type", "call").lower()
+            if option_type not in ("call", "put"):
+                raise ValueError("option_type must be 'call' or 'put'")
+            spot = float(payload.get("spot", 100))
+            tte = tte_days / 365.0
+            g = black_scholes(option_type, spot, strike, rate, vol, tte)
+            self.send_json(200, {
+                "symbol": symbol, "option_type": option_type, "spot": spot,
+                "strike": strike, "rate": rate, "vol": vol,
+                "tte_days": tte_days, "tte_years": tte,
+                "price": g.price, "delta": g.delta, "gamma": g.gamma,
+                "theta": g.theta, "vega": g.vega, "rho": g.rho,
+                "d1": g.d1, "d2": g.d2,
+            })
+            return
+
+        if subpath == "iv":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            strike = float(payload.get("strike", 0))
+            rate = float(payload.get("rate", 0.06))
+            tte_days = float(payload.get("tte_days", 30))
+            option_type = payload.get("option_type", "call").lower()
+            market_price = float(payload.get("market_price", 0))
+            spot = float(payload.get("spot", 100))
+            tte = tte_days / 365.0
+            iv = implied_volatility(option_type, spot, strike, rate, market_price, tte)
+            bs = black_scholes(option_type, spot, strike, rate, 0.20, tte) if iv is None else None
+            self.send_json(200, {
+                "symbol": symbol, "option_type": option_type, "spot": spot,
+                "strike": strike, "rate": rate,
+                "market_price": market_price, "tte_days": tte_days,
+                "implied_volatility": iv,
+                "theoretical_price_at_20pct_vol": bs.price if bs else None,
+            })
+            return
+
+        if subpath == "chain":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            spot = float(payload.get("spot", 100))
+            strikes_raw = payload.get("strikes", [])
+            if not isinstance(strikes_raw, list) or not strikes_raw:
+                # Generate strikes around spot
+                strikes = [round(spot * (1 + (i - 5) * 0.05), 2) for i in range(11)]
+            else:
+                strikes = [float(s) for s in strikes_raw]
+            expiry = payload.get("expiry", "2026-12-31")
+            rate = float(payload.get("rate", 0.06))
+            vol = float(payload.get("vol", 0.20))
+            tte_days = float(payload.get("tte_days", 30))
+            tte = tte_days / 365.0
+            market_prices = payload.get("market_prices", {})
+            chain = build_option_chain(
+                symbol, spot, strikes, expiry, rate, vol, tte,
+                market_prices=market_prices,
+            )
+            self.send_json(200, chain)
+            return
+
+        if subpath == "payoff":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            strike = float(payload.get("strike", 100))
+            premium = float(payload.get("premium", 5))
+            option_type = payload.get("option_type", "call").lower()
+            if option_type not in ("call", "put"):
+                raise ValueError("option_type must be 'call' or 'put'")
+            spot_low = float(payload.get("spot_low", 50))
+            spot_high = float(payload.get("spot_high", 150))
+            steps = int(payload.get("steps", 21))
+            spot_range = [spot_low + (spot_high - spot_low) * i / (steps - 1) for i in range(steps)]
+            result = payoff(option_type, strike, premium, spot_range)
+            self.send_json(200, {
+                "symbol": symbol, "option_type": option_type,
+                "strike": strike, "premium": premium,
+                "spot_low": spot_low, "spot_high": spot_high, "steps": steps,
+                "payoff": result,
+            })
+            return
+
+        self.send_error(404)
+
+    def _handle_realtime_subpath(self, payload):
+        subpath = self.path[len("/api/realtime/"):]
+        registry = self.server.price_registry
+
+        if subpath == "quote":
+            symbol = payload.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError("Provide a valid symbol.")
+            price = payload.get("price")
+            previous_close = payload.get("previous_close")
+            volume = payload.get("volume")
+            if price is not None:
+                q = registry.set_quote(
+                    symbol, float(price),
+                    float(previous_close) if previous_close is not None else None,
+                    int(volume) if volume is not None else None,
+                )
+            else:
+                q = registry.get_quote(symbol)
+                if q is None:
+                    raise ValueError(f"No quote for {symbol}")
+            self.send_json(200, q.to_dict())
+            return
+
+        if subpath == "quotes":
+            quotes = [q.to_dict() for q in registry.get_all_quotes()]
+            self.send_json(200, {
+                "quotes": quotes,
+                "count": len(quotes),
+                "symbols": registry.symbols(),
+            })
+            return
+
+        if subpath == "scan":
+            watchlist = payload.get("watchlist", [])
+            if not isinstance(watchlist, list) or not watchlist:
+                raise ValueError("Provide a watchlist of symbols.")
+            breakout_pct = float(payload.get("breakout_pct", 1.0))
+            result = intraday_scan(registry, [str(s) for s in watchlist], breakout_pct)
+            self.send_json(200, result)
+            return
+
+        self.send_error(404)
+
+    def _handle_tax_subpath(self, payload):
+        subpath = self.path[len("/api/tax/"):]
+
+        if subpath in ("capital-gains", "statement"):
+            fy = payload.get("fy", "FY2025-26")
+            trades_raw = payload.get("trades", [])
+            if not isinstance(trades_raw, list):
+                raise ValueError("trades must be a list.")
+            trades = []
+            for t in trades_raw:
+                td = t.get("trade_date")
+                if isinstance(td, str):
+                    td = datetime.fromisoformat(td).date()
+                elif isinstance(td, date):
+                    pass
+                else:
+                    raise ValueError("trade_date required (YYYY-MM-DD).")
+                symbol = t.get("symbol")
+                if not isinstance(symbol, str) or not symbol:
+                    raise ValueError("symbol required.")
+                side = t.get("side", "BUY").upper()
+                if side not in ("BUY", "SELL"):
+                    raise ValueError("side must be BUY or SELL.")
+                quantity = int(t.get("quantity", 0))
+                price = float(t.get("price", 0))
+                brokerage = float(t.get("brokerage", 0))
+                trades.append(Trade(
+                    trade_date=td, symbol=symbol, side=side,
+                    quantity=quantity, price=price, brokerage=brokerage,
+                ))
+            stmt = capital_gains_for_trades(trades, fy)
+            self.send_json(200, stmt.to_dict())
+            return
+
+        self.send_error(404)
+
+    def _handle_webhooks_subpath(self, payload):
+        subpath = self.path[len("/api/webhooks/"):]
+        store = self.server.webhook_store
+
+        if subpath == "register":
+            url = payload.get("url")
+            if not isinstance(url, str) or not url:
+                raise ValueError("Provide a webhook url.")
+            secret = payload.get("secret", "")
+            events = payload.get("events", ["*"])
+            if not isinstance(events, list):
+                raise ValueError("events must be a list.")
+            wh = store.register(url, secret, events)
+            self.send_json(200, wh.to_dict())
+            return
+
+        if subpath == "list":
+            self.send_json(200, {
+                "webhooks": [w.to_dict() for w in store.list_all()],
+                "count": len(store.list_all()),
+            })
+            return
+
+        if subpath == "unregister":
+            webhook_id = payload.get("id")
+            if not isinstance(webhook_id, str) or not webhook_id:
+                raise ValueError("Provide a webhook id.")
+            ok = store.unregister(webhook_id)
+            self.send_json(200, {"unregistered": ok})
+            return
+
+        if subpath == "test":
+            webhook_id = payload.get("id")
+            event = payload.get("event", "test.ping")
+            test_payload = payload.get("payload", {"test": True})
+            wh = store.get(webhook_id) if webhook_id else None
+            if wh is None:
+                raise ValueError("Webhook not found.")
+            ok = deliver_webhook(wh.url, wh.secret, event, test_payload)
+            self.send_json(200, {"delivered": ok, "event": event, "url": wh.url})
+            return
+
+        self.send_error(404)
+
 
 class DashboardServer(ThreadingHTTPServer):
     def get_request(self):
@@ -262,6 +686,9 @@ def create_server(host="127.0.0.1", port=8765, runtime=None):
     server = DashboardServer((host, port), DashboardHandler)
     server.runtime = runtime
     server.sessions = Sessions()
+    server.broker_adapter = None
+    server.price_registry = PriceRegistry()
+    server.webhook_store = WebhookStore()
     return server
 
 

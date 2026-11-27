@@ -8,8 +8,8 @@ dependency never breaks the core types.
 
 from ._init_ import (
     OrderSide, OrderType, ProductType, OrderStatus, BrokerPlatform,
-    BrokerConfig, OrderRequest, OrderResponse, Position,
-    PortfolioSnapshot, BrokerAdapter,
+    BrokerConfig, OrderRequest, OrderResponse, Order, Trade,
+    Position, Margin, PortfolioSnapshot, BrokerAdapter,
 )
 
 try:
@@ -27,9 +27,15 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     FenixAdapter = None
 
+try:
+    from .paper_adapter import PaperBrokerAdapter
+except Exception:  # pragma: no cover - optional dependency
+    PaperBrokerAdapter = None
+
 __all__ = [
     "OrderSide", "OrderType", "ProductType", "OrderStatus", "BrokerPlatform",
-    "BrokerConfig", "OrderRequest", "OrderResponse", "Position",
-    "PortfolioSnapshot", "BrokerAdapter",
+    "BrokerConfig", "OrderRequest", "OrderResponse", "Order", "Trade",
+    "Position", "Margin", "PortfolioSnapshot", "BrokerAdapter",
     "OpenAlgoAdapter", "KiteConnectAdapter", "FenixAdapter",
+    "PaperBrokerAdapter",
 ]

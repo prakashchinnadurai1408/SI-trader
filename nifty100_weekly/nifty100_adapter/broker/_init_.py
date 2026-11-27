@@ -11,7 +11,6 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
 
-
 class OrderSide(Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -179,6 +178,18 @@ class BrokerAdapter:
                             from_date: str = "", to_date: str = "") -> List[Dict[str, Any]]:
         raise NotImplementedError
 
+    def get_margins(self) -> Optional[Margin]:
+        """Fetch available cash / used margin. Returns None if unsupported."""
+        raise NotImplementedError
+
+    def get_orders(self) -> List[Order]:
+        """Fetch the order book. Returns empty list if unsupported."""
+        raise NotImplementedError
+
+    def get_trades(self) -> List[Trade]:
+        """Fetch trade fills. Returns empty list if unsupported."""
+        raise NotImplementedError
+
     def is_connected(self) -> bool:
         return self._connected
 
@@ -191,8 +202,64 @@ class BrokerAdapter:
         return f"{self.__class__.__name__}(platform={platform}, connected={self._connected})"
 
 
+@dataclass
+class Margin:
+    """Broker margin/funds snapshot."""
+    available_cash: float = 0.0
+    used_margin: float = 0.0
+    total_margin: float = 0.0
+    collateral: float = 0.0
+    exchange: str = "NSE"
+    segment: str = "equity"
+    timestamp: Optional[str] = None
+
+
+@dataclass
+class Order:
+    """Full order record (broker order book entry)."""
+    order_id: str
+    algo_id: str
+    symbol: str
+    action: OrderSide = OrderSide.BUY
+    quantity: int = 0
+    price: float = 0.0
+    order_type: OrderType = OrderType.MARKET
+    product: ProductType = ProductType.CNC
+    status: OrderStatus = OrderStatus.OPEN
+    filled_quantity: int = 0
+    average_price: float = 0.0
+    brokerage: float = 0.0
+    exchange: str = "NSE"
+    timestamp: Optional[str] = None
+    error_message: Optional[str] = None
+    stop_loss: Optional[float] = None
+    target: Optional[float] = None
+
+    @property
+    def is_filled(self) -> bool:
+        return self.status in (OrderStatus.FILLED, OrderStatus.COMPLETE)
+
+    @property
+    def total_value(self) -> float:
+        return self.filled_quantity * self.average_price
+
+
+@dataclass
+class Trade:
+    """Trade fill record."""
+    trade_id: str
+    order_id: str
+    symbol: str
+    action: OrderSide = OrderSide.BUY
+    quantity: int = 0
+    price: float = 0.0
+    timestamp: Optional[str] = None
+    brokerage: float = 0.0
+    exchange: str = "NSE"
+
+
 __all__ = [
     "OrderSide", "OrderType", "ProductType", "OrderStatus", "BrokerPlatform",
-    "BrokerConfig", "OrderRequest", "OrderResponse", "Position",
-    "PortfolioSnapshot", "BrokerAdapter",
+    "BrokerConfig", "OrderRequest", "OrderResponse", "Order", "Trade",
+    "Position", "Margin", "PortfolioSnapshot", "BrokerAdapter",
 ]
