@@ -15,6 +15,7 @@ try {
   // Use defaults when browser storage is unavailable.
 }
 const state = {
+  evidenceHunter: null, quantResult: null,
   workspace: null,
   workspaceInputs: {symbols: "", candidate: "", capital: 25000, risk: 500, buffer: 10, evalStart: "2023-01-01", evalEnd: "2024-12-31", holdoutStart: "2025-01-01", holdoutEnd: "2025-12-31", compareHoldout: false},
   hosted: false, authLoading: true, authEmail: "",
@@ -473,6 +474,36 @@ function watchlistView() {
   </section>`;
 }
 
+function hunterPanel() {
+  const hunt = state.evidenceHunter || state.committee?.evidenceHunt;
+  return `<section class="card desk-feeds"><div class="desk-card-header"><h2>Evidence hunter · all 48 parameters</h2></div>
+    <p class="desk-copy">Refresh existing connectors, probe alternate primary sources in parallel, and prioritize missing risk evidence. Retrieved pages require dated field extraction before they count as coverage.</p>
+    <div class="actions desk-copy"><button data-action="hunt-evidence" ${state.busy ? "disabled" : ""}>Hunt missing evidence</button>
+    <button class="secondary" data-action="tab" data-tab="lab">Open Greeks &amp; Monte Carlo</button></div>
+    ${hunt ? `<p class="desk-copy"><strong>${hunt.complete}/${hunt.total} parameters fully covered</strong> · ${escapeHtml(hunt.priorityMethod)} · probes use ${escapeHtml(hunt.probeSymbol)}, not all 100 constituents.</p>
+    ${hunt.aiError ? `<p class="desk-copy note">${escapeHtml(hunt.aiError)}</p>` : ""}
+    ${gridTable(["Source", "Retrieval", "Evidence validation"], hunt.attempts.map(item => [
+      `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.source)}</a>`, escapeHtml(item.status), escapeHtml(item.validation)]), "")}
+    <details class="desk-copy"><summary>All 48 acquisition tasks and blockers</summary>
+    ${gridTable(["Parameter", "Role", "Coverage", "Source", "Next action"], hunt.parameters.map(item => [escapeHtml(item.label), escapeHtml(item.role), `${item.available}/${item.expected}`, escapeHtml(item.sourceName), escapeHtml(item.nextAction)]), "")}
+    ${hunt.blockers.map(item => `<p>${escapeHtml(item.source)}: ${escapeHtml(item.reason)}</p>`).join("")}</details>` : ""}</section>`;
+}
+
+function quantPanel() {
+  const result = state.quantResult;
+  const inputs = result?.inputs || {spot:100,strike:100,volatilityPct:20,ratePct:0,dividendPct:0,calendarDays:30,sessions:21,option:"call"};
+  const fields = [["spot","Scenario spot",.01,1000000000],["strike","Option strike",.01,1000000000],["volatilityPct","Annual volatility assumption (%)",.01,500],
+    ["ratePct","Annual risk-free rate assumption (%)",-100,100],["dividendPct","Dividend yield assumption (%)",0,100],["calendarDays","Days to expiry (calendar)",1,3650],["sessions","Monte Carlo sessions",1,252]];
+  return `<section class="card desk-feeds"><div class="desk-card-header"><h2>Greeks &amp; Monte Carlo scenario lab</h2><span class="desk-tag">Hypothetical inputs</span></div>
+    <p class="desk-copy">European Black–Scholes sensitivities and 10,000 GBM paths. These assumptions are separate from observed option IV, research evidence, and stock predictions. The three agents receive this scenario only after you calculate it.</p>
+    <form id="quant-scenario" class="desk-copy">${fields.map(([key,label,min,max])=>`<label for="quant-${key}">${label}</label><input id="quant-${key}" name="${key}" type="number" step="${key === 'sessions' ? '1' : 'any'}" min="${min}" max="${max}" value="${escapeHtml(inputs[key])}" required>`).join("")}
+    <label for="quant-option">Option type</label><select id="quant-option" name="option"><option value="call" ${inputs.option==='call'?'selected':''}>Call</option><option value="put" ${inputs.option==='put'?'selected':''}>Put</option></select>
+    <div class="actions"><button ${state.busy ? "disabled" : ""}>Calculate Greeks &amp; Monte Carlo</button></div></form>
+    ${result ? `${gridTable(["Sensitivity", "Per option unit"], Object.entries(result.greeks).map(([key,value])=>[escapeHtml(key),value.toFixed(6)]), "")}
+      ${gridTable(["Percentile", "Terminal scenario return"], result.monteCarlo.percentiles.map((p,i)=>["P"+p,percent(result.monteCarlo.terminalReturnsPct[i])]), "")}
+      <p class="desk-copy note">95% scenario VaR: ${percent(result.monteCarlo.var95LossPct)} · Expected shortfall: ${percent(result.monteCarlo.expectedShortfall95LossPct)}. ${escapeHtml(result.monteCarlo.assumption)}</p>` : ""}</section>`;
+}
+
 function evidenceView() {
   const result = state.evidence;
   const observed = result?.parameters.filter(item => item.status === "Observed NSE evidence").length;
@@ -485,7 +516,7 @@ function evidenceView() {
       count(item.covered), count(item.imported), count(item.staleImported), escapeHtml(item.refresh), source,
       sample ? `<details><summary>${escapeHtml(sample.symbol)} · ${escapeHtml(sample.asOf.slice(0, 10))}</summary><pre>${escapeHtml(JSON.stringify(sample.value, null, 2))}</pre></details>` : "—"];
   }) || [];
-  return `<section class="card desk-feeds">
+  return hunterPanel() + `<section class="card desk-feeds">
     <div class="desk-card-header"><h2>Parameter data coverage</h2><span class="desk-tag">Research evidence</span></div>
     <p class="desk-copy">Inspect what each feed supplied. Advisory data stays separate from score weights and veto decisions.</p>
     <div class="actions desk-copy"><button data-action="load-evidence" ${state.busy ? "disabled" : ""}>${state.busy ? "Checking feeds…" : "Refresh data feeds"}</button><button class="secondary" data-action="tab" data-tab="full">Inspect full catalogue coverage</button></div>
@@ -501,7 +532,7 @@ function evidenceView() {
 function fullCatalogueView() {
   const result = state.fullCatalogue;
   const stocks = result?.stocks || [];
-  return `<section class="card desk-feeds">
+  return hunterPanel() + `<section class="card desk-feeds">
     <div class="desk-card-header"><h2>Full 48-parameter screen</h2><span class="desk-tag">Research only</span></div>
     <p class="desk-copy">All 48 parameters need current, typed evidence. Stock-level fields need all 100 constituents.
        The model sees a summary of every parameter. Filters and vetoes are applied before scoring.</p>
@@ -555,7 +586,7 @@ async function loadFullCatalogue(run) {
 function committeeView() {
   const result = state.committee;
   const list = values => escapeHtml(values.join(", ") || "None");
-  return `<section class="card desk-feeds">
+  return hunterPanel() + `<section class="card desk-feeds">
     <div class="desk-card-header"><h2>Maker, Checker &amp; Umpire</h2><span class="desk-tag">Research only</span></div>
     <p class="desk-copy">Get a second opinion on the shortlist. Partial evidence supports research only. Investment sizing and orders are unavailable.</p>
     <form id="research-committee" class="desk-copy">
@@ -568,13 +599,14 @@ function committeeView() {
     ${result ? `<div class="builder-result">
       <p class="desk-copy"><strong>${result.complete}/${result.total} parameters complete</strong> · NSE ${escapeHtml(result.market.asOf)}</p>
       ${result.dataErrors.map(error => `<p class="desk-copy error">${escapeHtml(error)}</p>`).join("")}
+      ${result.quantitativeContext ? `<p class="desk-copy note">Quantitative inputs: ${escapeHtml(result.quantitativeContext.kind || result.quantitativeContext.status)}. Missing or hypothetical inputs give no stock risk clearance.</p>` : ""}
       <p class="desk-copy"><strong>Maker shortlist</strong> · ${list(result.maker)}</p>
       <p class="desk-copy"><strong>Checker exclusions</strong> · ${list(result.checkerAvoids)}${result.checkerRejectedStrategy ? " · Checker rejected the research shortlist" : ""}</p>
       <p class="desk-copy"><strong>Downside scenarios</strong> · ${list(result.scenarios)}</p>
       <p class="desk-copy"><strong>Umpire research priorities</strong></p>
       ${gridTable(["Stock", "Close", "1 session", "5 sessions", "Research weight", "Unverified risk checks"],
         result.researchPriorities.map(item => [escapeHtml(item.symbol), cash(item.close), percent(item.daily_pct),
-          percent(item.five_session_pct), count(item.research_weight_pct) + "%", count(item.missing_risk_count)]), "No priorities passed reconciliation.")}
+          percent(item.five_session_pct), count(item.research_weight_pct) + "%", count(item.missing_risk_count)]), "No priorities passed reconciliation. Incomplete evidence is not a prediction that these stocks will fall.")}
       <p class="desk-copy"><strong>Held stocks flagged for exit review</strong></p>
       ${gridTable(["Stock", "Review reason", "Known failures"], result.reviewExits.map(item =>
         [escapeHtml(item.symbol), escapeHtml(item.reason), list(item.knownFailures)]), "No held stocks flagged.")}
@@ -728,7 +760,7 @@ function strategyLab() {
     ["EWMA volatility, annualized", "ewmaVolPct", "%"], ["21-session momentum", "momentum21Pct", "%"],
     ["63-session momentum", "momentum63Pct", "%"], ["14-session RSI", "rsi14"], ["14-session ATR", "atr14", " INR"],
   ];
-  return `<div class="desk-lab">
+  return quantPanel() + `<div class="desk-lab">
     <section class="card desk-run">
       <div><h2>Nifty 100 research workspace</h2><p>Compare monthly strategy ideas, inspect market breadth, and test stock downside scenarios.</p></div>
       <button data-action="load-lab" ${state.busy ? "disabled" : ""}>${state.busy ? "Working…" : "Refresh NSE snapshot"}</button>
@@ -765,7 +797,7 @@ function strategyLab() {
         </select>
         <label for="lab-horizon">Trading sessions</label>
         <input id="lab-horizon" name="horizon" type="number" min="5" max="30" value="${count(state.labHorizon)}" required ${!lab.historyConfigured ? "disabled" : ""}>
-        <div class="actions"><button ${state.busy || !lab.historyConfigured ? "disabled" : ""}>Run stock diagnostics</button></div>
+        <div class="actions"><button ${state.busy || !lab.historyConfigured ? "disabled" : ""}>Run Monte Carlo diagnostics</button></div>
       </form>
       ${!lab.historyConfigured ? '<p class="desk-copy note">Set SI_TRADER_STRATEGY_BUNDLE in the server environment to enable diagnostics on verified-format historical inputs.</p>' : ""}
       ${result ? `<p class="desk-copy"><strong>${escapeHtml(result.symbol)}</strong> · ${escapeHtml(result.asOf)} · ${count(result.sessions)} sessions · Close ${cash(result.close)}</p>
@@ -779,7 +811,7 @@ function strategyLab() {
             ["90th-percentile overnight downside gap", percent(result.trailingInputs.gap_risk == null ? null : result.trailingInputs.gap_risk * 100)],
             ["20-session median traded value", cash(result.trailingInputs.median_turnover)],
           ], "")}</details>` : ""}
-        <details class="desk-copy" open><summary>Simulated return range</summary>
+        <details class="desk-copy" open><summary>Monte Carlo simulated return range</summary>
           <p class="note">${escapeHtml(result.stress.assumption)}. Scenario percentiles do not predict actual returns.</p>
           ${gridTable(["Session", ...result.stress.percentiles.map(value => "P" + value)],
             result.stress.days.map((day, i) => [count(day), ...result.stress.returnsPct[i].map(percent)]), "")}
@@ -906,7 +938,7 @@ function show(message = "", error = false) {
   render();
 }
 
-const backgroundResearch = new Set(["/api/strategy", "/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test"]);
+const backgroundResearch = new Set(["/api/strategy", "/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test", "/api/evidence-hunt"]);
 async function request(path, body) {
   if (!backgroundResearch.has(path)) return directRequest(path, body);
   let job = await directRequest("/api/research-jobs", {route: path, body,
@@ -980,6 +1012,18 @@ app.addEventListener("change", event => {
 });
 
 app.addEventListener("submit", async event => {
+  if (event.target.id === "quant-scenario") {
+    event.preventDefault();
+    if (state.busy) return;
+    const form = new FormData(event.target);
+    const inputs = Object.fromEntries([...form].map(([key, value]) => [key, key === "option" ? value : Number(value)]));
+    state.busy = true;
+    try { state.quantResult = await request("/api/quant-scenario", inputs); show("Hypothetical Greeks and Monte Carlo scenario ready."); }
+    catch (error) { show(error.message, true); }
+    finally { state.busy = false; render(); }
+    return;
+  }
+
   event.preventDefault();
   const form = new FormData(event.target);
   if (event.target.id.startsWith("workspace-") && !state.busy) {
@@ -1099,7 +1143,7 @@ app.addEventListener("submit", async event => {
     state.committee = null;
     show("Maker, Checker and Umpire are reviewing in sequence. This may take a few minutes.");
     try {
-      state.committee = await request("/api/research-committee", {model: config.model, objective: config.objective, holdings});
+      state.committee = await request("/api/research-committee", {model: config.model, objective: config.objective, holdings, quantScenario: state.quantResult?.inputs || null});
       show("Three-agent review complete.");
     } catch (error) {
       show(error.message, true);
@@ -1222,6 +1266,15 @@ app.addEventListener("submit", async event => {
 app.addEventListener("click", async event => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   switch (action) {
+    case "hunt-evidence":
+      if (state.busy) return;
+      state.busy = true;
+      show("Hunter is refreshing feeds and checking alternate primary sources.");
+      try { state.evidenceHunter = await request("/api/evidence-hunt", {model: config.model || null}); show("Evidence hunt complete. Review source attempts and remaining gaps."); }
+      catch (error) { show(error.message, true); }
+      finally { state.busy = false; render(); }
+      break;
+
     case "workspace-refresh": await workspaceRequest({action:"status"}); break;
     case "workspace-halt": await workspaceRequest({action:state.workspace?.ledger.halted?"resume":"halt"}); break;
     case "workspace-paper": await workspaceRequest({action:"paper",planId:state.workspace?.plan.id}); break;

@@ -6,7 +6,7 @@ from threading import Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-ROUTES = {"/api/strategy", "/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test"}
+ROUTES = {"/api/strategy", "/api/strategy-builder", "/api/full-catalogue", "/api/research-committee", "/api/model-test", "/api/evidence-hunt"}
 _progress = ContextVar("research_progress", default=None)
 
 

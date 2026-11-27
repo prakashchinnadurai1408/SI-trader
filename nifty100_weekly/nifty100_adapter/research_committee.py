@@ -120,10 +120,12 @@ def checked_list(payload, key, allowed, cap):
     return list(dict.fromkeys(values))
 
 
-def review_agents(frame, evidence, records, model, objective, holdings):
+def review_agents(frame, evidence, records, model, objective, holdings, quantitative_context=None, acquisition_context=None):
     holdings = held_symbols(holdings)
     universe, details, risk, catalogue = shortlist_context(frame, evidence, records, holdings)
     context = {
+        "quantitative_context": quantitative_context or {"status": "No verified quantitative inputs supplied"},
+        "source_acquisition": acquisition_context or {},
         "objective": objective, "as_of": evidence["market"]["asOf"],
         "catalogue_fields": ["role", "observations", "required_observations", "observed_signal"],
         "catalogue": catalogue, "full_data_ready": evidence["ready"],
@@ -217,7 +219,19 @@ def empty_review(evidence):
     }
 
 
-def build_committee(model, objective, holdings):
+def build_committee(model, objective, holdings, quant_scenario=None):
+    from .evidence_hunter import gap_plan, hunt
+    from .quantitative import scenario
     frame, market = load_nifty100()
     evidence, records = readiness(frame, market)
-    return review_agents(frame, evidence, records, model, objective, holdings)
+    quantitative = scenario(quant_scenario) if quant_scenario is not None else {
+        "status": "Missing quantitative inputs", "requirements": [
+            "Dated adjusted price and benchmark history for calibrated volatility / Monte Carlo research",
+            "Option type, strike, expiry, IV, risk-free rate and dividend yield for observed-contract Greeks"],
+        "rule": "Missing inputs are not zero risk. Hypothetical scenarios cannot clear stock eligibility or predict returns."}
+    acquisition = hunt({}, initial=(frame, market, evidence)) if not evidence["ready"] else None
+    acquisition_context = {"note": acquisition["note"], "attempts": [
+        {key: item[key] for key in ("source", "status", "validation")} for item in acquisition["attempts"]
+    ]} if acquisition else {"status": "All parameter evidence already validated"}
+    result = review_agents(frame, evidence, records, model, objective, holdings, quantitative, acquisition_context)
+    return {**result, "acquisitionPlan": gap_plan(evidence), "quantitativeContext": quantitative, "evidenceHunt": acquisition}
