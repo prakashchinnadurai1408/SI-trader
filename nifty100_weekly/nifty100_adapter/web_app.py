@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import logging
+import socket
 from hashlib import sha256
 from uuid import uuid4
 import re
@@ -326,6 +327,14 @@ def execute_research(server, route, body):
 
 
 class DashboardServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR can let an older checkout share the same port.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(90)

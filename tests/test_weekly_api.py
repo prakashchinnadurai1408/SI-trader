@@ -120,6 +120,10 @@ class WeeklyAPI(unittest.TestCase):
         self.assertIn("delta",result["greeks"])
         self.assertEqual(result["monteCarlo"]["paths"],10000)
 
+    def test_second_checkout_cannot_share_the_active_server_port(self):
+        with self.assertRaises(OSError):
+            create_server(port=self.server.server_port, runtime=Runtime())
+
     def test_missing_ranking_data_returns_empty_basket_not_an_exception(self):
         self.frame["price_momentum_weekly"] = float("nan")
         status, result = self.request()
