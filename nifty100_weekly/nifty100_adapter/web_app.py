@@ -5,12 +5,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import logging
+import socket
 from hashlib import sha256
 from uuid import uuid4
 import re
 from pathlib import Path
 from .deployment import Runtime, Sessions
 from .research_jobs import ResearchJobs, JobBusy
+from .evidence_hunter import hunt
+from .quantitative import scenario
 
 from .ai_parameters import PARAMETERS, catalogue_view, propose_profile
 from .llm_connections import PROVIDERS, profiles, save_profile, delete_profile, provider_models, ProviderUnavailable
@@ -133,7 +136,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _dispatch(self, payload):
         try:
-            if self.path == "/api/holdings":
+            if self.path == "/api/evidence-hunt":
+                self.send_json(200, hunt(payload))
+            elif self.path == "/api/quant-scenario":
+                self.send_json(200, scenario(payload))
+            elif self.path == "/api/broker/connect":
+                platform = payload.get("platform", "paper")
+                if platform == "paper":
+                    ledger = self.server.workspace.dispatch({"action": "status"})["ledger"]
+                    self.send_json(200, {"connected": True, "platform": "paper", "mode": "PAPER",
+                        "cash": ledger["cash"], "liveEnabled": False, "message": "Paper simulation connected. No real broker funds or orders."})
+                elif platform in ("investright", "hdfc_securities"):
+                    snapshot = broker_snapshot()
+                    if "error" in snapshot["funds"]:
+                        raise ValueError(snapshot["funds"]["error"])
+                    if snapshot["funds"].get("value") is None:
+                        raise ValueError("InvestRight returned no recognizable funds balance. Check the API session and funds response.")
+                    self.send_json(200, {"connected": True, "platform": "investright", "mode": "READ_ONLY", "liveEnabled": False, "snapshot": snapshot})
+                else:
+                    raise ValueError("Choose paper or the read-only InvestRight connection.")
+            elif self.path == "/api/holdings":
                 self.send_json(200, {"count": holdings_count()})
             elif self.path == "/api/broker":
                 self.send_json(200, broker_snapshot())
@@ -200,7 +222,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     raise ValueError("Choose an available model in LLM Configuration.")
                 if self.path == "/api/research-committee":
                     holdings = held_symbols(payload.get("holdings", []))
-                    self.send_json(200, build_committee(model, objective.strip(), holdings))
+                    self.send_json(200, build_committee(model, objective.strip(), holdings, payload.get("quantScenario")))
                     return
                 if self.path == "/api/full-catalogue":
                     self.send_json(200, full_catalogue(model, objective.strip()))
@@ -305,6 +327,14 @@ def execute_research(server, route, body):
 
 
 class DashboardServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR can let an older checkout share the same port.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def get_request(self):
         connection, address = super().get_request()
         connection.settimeout(90)

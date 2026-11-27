@@ -98,6 +98,32 @@ class WeeklyAPI(unittest.TestCase):
         self.assertGreaterEqual(result["execution"]["cashRemaining"], 50000)
         self.assertTrue(self.planner.called)
 
+    def test_paper_broker_connect_does_not_require_credentials_or_invent_funds(self):
+        with patch("nifty100_weekly.nifty100_adapter.web_app.broker_snapshot") as live:
+            status, result = self.request("/api/broker/connect", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["platform"], "paper")
+        self.assertIsNone(result["cash"])
+        self.assertFalse(result["liveEnabled"])
+        live.assert_not_called()
+        self.assertEqual(self.request("/api/broker/connect", {"platform": "unknown"})[0], 400)
+
+    def test_live_broker_requires_verified_read_only_funds(self):
+        with patch("nifty100_weekly.nifty100_adapter.web_app.broker_snapshot", return_value={"funds":{"error":"Configure InvestRight API credentials"}}):
+            status, result = self.request("/api/broker/connect", {"platform":"investright"})
+        self.assertEqual(status,400)
+        self.assertIn("credentials",result["error"])
+
+    def test_quant_scenario_endpoint(self):
+        status, result = self.request("/api/quant-scenario", {"spot":100,"strike":100,"volatilityPct":20})
+        self.assertEqual(status,200)
+        self.assertIn("delta",result["greeks"])
+        self.assertEqual(result["monteCarlo"]["paths"],10000)
+
+    def test_second_checkout_cannot_share_the_active_server_port(self):
+        with self.assertRaises(OSError):
+            create_server(port=self.server.server_port, runtime=Runtime())
+
     def test_missing_ranking_data_returns_empty_basket_not_an_exception(self):
         self.frame["price_momentum_weekly"] = float("nan")
         status, result = self.request()

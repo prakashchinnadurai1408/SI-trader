@@ -36,3 +36,14 @@ By default the service binds to loopback and uses a demo sign-in. Keep that mode
 - [Six-rebalance paper pilot and screenshot review](nifty100_weekly/PAPER_PILOT.md)
 - [Agent tools and filing review workflow](nifty100_weekly/AGENT_TOOLS.md)
 - [CI, hosted authentication, Docker and Stormkit deployment](deploy/README.md)
+
+
+## Evidence hunting and quantitative research
+
+- Open **Data feeds**, **Full 48 research**, or **Three-agent review** and choose **Hunt missing evidence**. The hunter refreshes validated feeds and probes up to 12 approved primary-source documents using four workers. It maps all 48 parameter gaps to sources, refresh schedules, required value contracts and remaining acquisition work. Optional LLM prioritization can order work; it cannot manufacture observations or override risk checks.
+- Three-agent review automatically runs acquisition probes when coverage is incomplete. Retrieved pages remain candidate documents until a dated parser/normalized connector validates the actual fields. A probe of one constituent never means coverage for all 100. Configure `SI_TRADER_SOURCE_MANIFEST` with approved normalized feed endpoints as described in [catalogue feeds](nifty100_weekly/CATALOGUE_FEEDS.md). Legacy source-registry endpoint templates are discovery hints, not proof that a feed is connected. Licensed, legal-case and issuer-report data can remain unavailable.
+- Open **Strategy Lab** for **Greeks & Monte Carlo scenario lab**. It computes European Black–Scholes delta, gamma, theta per calendar day, vega per volatility percentage point and rho per rate percentage point, plus 10,000 seeded GBM paths and scenario VaR/expected shortfall. All inputs are explicitly hypothetical assumptions; there is no automatic option-chain/IV connection. Calculated scenarios are included in the next three-agent review as hypothetical context, never as verified stock evidence.
+- Historical stock Monte Carlo diagnostics still require `SI_TRADER_STRATEGY_BUNDLE` with 127 aligned stock/benchmark sessions. Missing price history is reported rather than synthesized.
+- `POST /api/broker/connect` with `{}` or `{"platform":"paper"}` connects only the existing paper workspace. It requires no broker credentials and does not invent cash balances. `investright`/`hdfc_securities` verifies configured HDFC API funds in read-only mode; no live-order endpoint is added.
+
+Greeks background: [Federal Reserve trading manual](https://www.federalreserve.gov/publications/files/trading.pdf). Source discovery: [SEBI corporate-filings directory](https://www.sebi.gov.in/curation/corporate_filings.html), [RBI RSS](https://www.rbi.org.in/Scripts/rss.aspx), [PIB RSS](https://www.pib.gov.in/ViewRss.aspx?lang=1&reg=1).

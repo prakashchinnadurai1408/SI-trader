@@ -26,6 +26,9 @@ if __name__ == "__main__":
     weekly_frame = pd.DataFrame([dict(symbol=f"TEST{i:03}", company_name=f"Fixture {i}", isin=f"FIXTURE{i}", close=100.+i,
         daily_turnover_crore=100., price_momentum_daily=-1., price_momentum_weekly=-5.+i/10) for i in range(100)])
     patch("nifty100_weekly.nifty100_adapter.web_app.load_nifty100", return_value=(weekly_frame, {"source":"Browser test fixture","asOf":"2026-11-25","covered":100,"universeSize":100,"unverifiedChecks":[]})).start()
+    patch("nifty100_weekly.nifty100_adapter.evidence_hunter.load_nifty100", return_value=(weekly_frame, {"source":"Browser test fixture","asOf":"2026-11-25","covered":100,"universeSize":100,"unverifiedChecks":[]})).start()
+    patch("nifty100_weekly.nifty100_adapter.evidence_hunter.download", return_value=b"<html>Primary source candidate</html>").start()
+    patch("nifty100_weekly.nifty100_adapter.evidence_hunter.agent", return_value={"priority":["promoter_pledging_pct","debt_equity_ratio"]}).start()
     patch("nifty100_weekly.nifty100_adapter.web_app.installed_models", return_value=["fixture"]).start()
     patch("nifty100_weekly.nifty100_adapter.full_catalogue.pe_data", return_value={}).start()
     patch("nifty100_weekly.nifty100_adapter.full_catalogue.ownership_data", return_value={}).start()

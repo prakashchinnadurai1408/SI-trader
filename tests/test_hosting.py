@@ -48,7 +48,7 @@ class HostedAPI(unittest.TestCase):
         return headers["Set-Cookie"].split(";", 1)[0]
 
     def test_api_requires_auth_even_when_ui_is_bypassed(self):
-        for path in ("/api/llm-save", "/api/broker", "/api/monthly-comparison", "/api/strategy", "/api/workspace", "/api/research-jobs", "/api/research-jobs/status"):
+        for path in ("/api/llm-save", "/api/broker", "/api/broker/connect", "/api/evidence-hunt", "/api/quant-scenario", "/api/monthly-comparison", "/api/strategy", "/api/workspace", "/api/research-jobs", "/api/research-jobs/status"):
             with self.subTest(path=path):
                 self.assertEqual(self.request(path, {})[0], 401)
 
